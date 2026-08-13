@@ -1,0 +1,6 @@
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# Secrets — never commit tokens, keys, or credentials
+.env
+*.pem
