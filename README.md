@@ -62,8 +62,19 @@ Push to `main`. GitHub Actions builds the image and pushes it to `ghcr.io`, then
 restarting the app in the TrueNAS UI pulls it — `pull_policy: always` means every
 start re-pulls.
 
-To roll back, change the tag in `compose.yaml` from `latest` to a commit SHA and
-redeploy.
+### Releases
+
+Pushing a git tag publishes matching image tags:
+
+```bash
+git tag v0.0.2 && git push --tags
+```
+
+That produces `0.0.2` and `0.0`, alongside the `latest` and `sha-<commit>` tags that
+every push to `main` produces.
+
+To pin or roll back, change the tag in `compose.yaml` from `latest` to a version or
+a `sha-<commit>` tag and redeploy.
 
 ## Notes
 
