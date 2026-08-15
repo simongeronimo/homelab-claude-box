@@ -138,6 +138,61 @@
   button.stop { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   button.stop:hover { color: #c0392b; border-color: #c0392b; }
 
+  details#add {
+    margin-top: 28px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 15px;
+    list-style-position: inside;
+  }
+
+  #create-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0;
+  }
+
+  input[type="text"], #create-name {
+    flex: 1 1 180px;
+    min-width: 0;
+    font: inherit;
+    font-size: 15px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-height: 42px;
+  }
+  #create-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  #repos ul { margin-top: 12px; }
+  #repos li { padding: 12px 14px; }
+  .desc {
+    display: block;
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 3px;
+  }
+
   button {
     font: inherit;
     font-size: 14px;
@@ -179,6 +234,23 @@
   <h1>Claude Box</h1>
   <div id="running"></div>
   <div id="list"><p class="note">Loading…</p></div>
+
+  <details id="add">
+    <summary>Add a project</summary>
+
+    <form id="create-form">
+      <input id="create-name" name="name" placeholder="new-repo-name"
+             pattern="[A-Za-z0-9._\-]+" required autocapitalize="off"
+             autocorrect="off" spellcheck="false">
+      <label class="check">
+        <input type="checkbox" id="create-private" checked> Private
+      </label>
+      <button type="submit">Create</button>
+    </form>
+
+    <div id="repos"><p class="note">Loading your repositories…</p></div>
+  </details>
+
   <div id="status" role="status" aria-live="polite"></div>
 </main>
 
@@ -399,6 +471,95 @@ async function launch(project, sessionId, button) {
     setTimeout(loadRunning, 2000); // Claude takes a moment to register
   } catch (err) {
     say(`Could not start ${project}: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+// Repositories load on first expand, not on page load — it's a network round
+// trip to GitHub for something most visits never open.
+const addEl = document.getElementById('add');
+const reposEl = document.getElementById('repos');
+let reposLoaded = false;
+
+addEl.addEventListener('toggle', () => {
+  if (addEl.open && !reposLoaded) loadRepos();
+});
+
+async function loadRepos() {
+  reposLoaded = true;
+  try {
+    const res = await fetch('/api/github/repos');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `repos returned ${res.status}`);
+
+    if (data.repos.length === 0) {
+      reposEl.innerHTML = '<p class="note">Every repository is already cloned here.</p>';
+      return;
+    }
+
+    const ul = document.createElement('ul');
+    for (const repo of data.repos) {
+      ul.append(repoCard(repo));
+    }
+    reposEl.replaceChildren(ul);
+  } catch (err) {
+    reposLoaded = false; // let them retry by collapsing and reopening
+    reposEl.innerHTML = '<p class="note"></p>';
+    reposEl.querySelector('.note').textContent = `Could not list repositories: ${err.message}`;
+  }
+}
+
+function repoCard(repo) {
+  const li = document.createElement('li');
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const text = document.createElement('div');
+  text.innerHTML = '<span class="name"></span><span class="desc"></span>';
+  text.querySelector('.name').textContent = repo.repo;
+  text.querySelector('.desc').textContent = repo.description || '';
+
+  const button = document.createElement('button');
+  button.className = 'ghost';
+  button.textContent = 'Clone';
+  button.addEventListener('click', () => post('/api/clone', { repo: repo.repo }, button, `Cloning ${repo.repo}…`));
+
+  row.append(text, button);
+  li.append(row);
+  return li;
+}
+
+document.getElementById('create-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const name = document.getElementById('create-name').value.trim();
+  const isPrivate = document.getElementById('create-private').checked;
+  const button = event.target.querySelector('button');
+  post('/api/create', { name, private: isPrivate }, button, `Creating ${name}…`);
+});
+
+/** Clone and create both end in a started session and a changed project list. */
+async function post(path, body, button, pending) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '…';
+  say(pending);
+
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `${path} returned ${res.status}`);
+    say(`${data.output}\nOpen the Claude app to continue.`);
+    reposLoaded = false;
+    load();
+    if (addEl.open) loadRepos();
+  } catch (err) {
+    say(err.message);
   } finally {
     button.disabled = false;
     button.textContent = label;

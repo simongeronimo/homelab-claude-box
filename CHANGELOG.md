@@ -8,6 +8,8 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-15
+
 ### Added
 
 - Launcher web app (`app/server.js`, `app/index.html`) on port 8080: lists git
@@ -23,6 +25,12 @@ Image tags matching each version are published to
   in the Claude app and never responds.
 - `start-session` marks onboarding complete and the project directory trusted
   before spawning. Both prompts otherwise block a detached session forever.
+- Starting projects that aren't on the box yet. `GET /api/github/repos` lists
+  your GitHub repositories minus the ones already cloned; `POST /api/clone`
+  clones one and starts a session in it, and `POST /api/create` makes a new
+  repository (private by default), clones it, and starts a session. Both refuse
+  before doing any work if the target directory exists, so a failure never
+  leaves a half-made project.
 - Stopping sessions. `GET /api/running` lists live sessions from
   `claude agents --json`; `POST /api/stop` signals one by pid, after checking it
   against that list so the endpoint can't signal arbitrary processes. Sessions
@@ -34,6 +42,9 @@ Image tags matching each version are published to
   in the web app doesn't take running Claude sessions down with the container.
 - `compose.dev.yaml` for local development: builds from the working tree and
   bind-mounts `app/` and `bin/start-session`, so edits are live without a rebuild.
+- Resource limits on the deployed container (`pids_limit`, `mem_limit`,
+  `no-new-privileges`), so a runaway agent takes down the container rather than
+  the NAS.
 
 ### Changed
 
@@ -61,5 +72,6 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/simongeronimo/homelab-claude-box/releases/tag/v0.0.1

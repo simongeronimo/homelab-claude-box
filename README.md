@@ -82,6 +82,12 @@ thing `bin/serve` exists to prevent.
 Rebuild only when the Dockerfile changes. Put some git repositories in
 `data/home/github/` to have something to launch.
 
+Cloning and creating repositories needs GitHub credentials in the container:
+
+```bash
+docker compose -f compose.dev.yaml exec claude-box gh auth login
+```
+
 ## Updating
 
 Push to `main`. GitHub Actions builds the image and pushes it to `ghcr.io`, then

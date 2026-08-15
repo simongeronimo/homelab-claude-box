@@ -14,9 +14,9 @@ const PORT = Number(process.env.PORT || 8080);
 const PROJECTS_DIR = '/root/github';
 const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
-// ---------------------------------------------------------------------------
-// Handlers. These two are yours to write.
-// ---------------------------------------------------------------------------
+const exists = (p) => fsp.access(p).then(() => true, () => false);
+
+const repoName = (nameWithOwner) => nameWithOwner.split('/').pop();
 
 /**
  * Where Claude keeps a project's transcripts: one .jsonl per session, under
@@ -120,11 +120,7 @@ async function listProjects() {
       .filter((e) => e.isDirectory())
       .map(async (e) => {
         const dir = path.join(PROJECTS_DIR, e.name);
-        try {
-          await fsp.access(path.join(dir, '.git'));
-        } catch {
-          return null;
-        }
+        if (!(await exists(path.join(dir, '.git')))) return null;
         return { name: e.name, lastUsed: await lastUsed(dir) };
       }),
   );
@@ -136,8 +132,7 @@ async function listProjects() {
 
 /** Live sessions, as Claude itself reports them. */
 async function listRunning() {
-  const { stdout } = await execFileAsync('claude', ['agents', '--json']);
-  const agents = JSON.parse(stdout);
+  const agents = JSON.parse(await run('claude', ['agents', '--json']));
 
   return agents.map((a) => ({
     pid: a.pid,
@@ -171,24 +166,96 @@ async function stopSession(pid) {
  * command. start-session validates the name as well.
  */
 async function startSession(name, sessionId) {
-  try {
-    const args = sessionId ? [name, sessionId] : [name];
-    const { stdout } = await execFileAsync('start-session', args);
-    return stdout.trim();
-  } catch (err) {
-    // start-session reports why it refused on stderr; that is what the user
-    // needs to see, not "Command failed with exit code 1".
-    throw new Error(err.stderr?.trim() || err.message);
+  return run('start-session', sessionId ? [name, sessionId] : [name]);
+}
+
+/** Repositories on GitHub that aren't cloned here yet. */
+async function githubRepos() {
+  const stdout = await run('gh', [
+    'repo',
+    'list',
+    '--limit',
+    '100',
+    '--json',
+    'nameWithOwner,description,updatedAt',
+  ]);
+
+  const local = new Set((await listProjects()).map((p) => p.name));
+  return JSON.parse(stdout)
+    .filter((r) => !local.has(repoName(r.nameWithOwner)))
+    .map((r) => ({ repo: r.nameWithOwner, description: r.description, updatedAt: r.updatedAt }));
+}
+
+/** Refuse before doing any work, so a failure never leaves a half-made project. */
+async function claimDirectory(name) {
+  if (!isValidName(name)) throw new Error(`invalid project name: ${name}`);
+
+  const dir = path.join(PROJECTS_DIR, name);
+  if (await exists(dir)) throw new Error(`${name} already exists`);
+  return dir;
+}
+
+async function cloneAndStart(nameWithOwner) {
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(nameWithOwner || '')) {
+    throw new Error(`invalid repository: ${nameWithOwner}`);
   }
+  const name = repoName(nameWithOwner);
+  const dir = await claimDirectory(name);
+
+  await run('gh', ['repo', 'clone', nameWithOwner, dir]);
+  return startSession(name);
+}
+
+async function createAndStart(name, isPrivate) {
+  await claimDirectory(name);
+
+  // --clone puts it in cwd/<name>, which is where projects live anyway.
+  await run('gh', ['repo', 'create', name, isPrivate ? '--private' : '--public', '--clone'], {
+    cwd: PROJECTS_DIR,
+  });
+  return startSession(name);
 }
 
 // ---------------------------------------------------------------------------
 // Plumbing.
 // ---------------------------------------------------------------------------
 
+/**
+ * Run a command, returning stdout. Failures surface the command's own stderr,
+ * which says what actually went wrong, rather than "Command failed with exit
+ * code 1".
+ */
+async function run(cmd, args, opts) {
+  try {
+    const { stdout } = await execFileAsync(cmd, args, opts);
+    return stdout.trim();
+  } catch (err) {
+    throw new Error(err.stderr?.trim() || err.message);
+  }
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+/**
+ * Parse a JSON object body. Answers 400 and returns null if it isn't one, so
+ * callers can `if (!body) return;` knowing a response has already gone out.
+ */
+async function readJson(req, res) {
+  let body;
+  try {
+    body = await json(req);
+  } catch {
+    sendJson(res, 400, { error: 'expected a JSON body' });
+    return null;
+  }
+  if (body === null || typeof body !== 'object') {
+    sendJson(res, 400, { error: 'expected a JSON object' });
+    return null;
+  }
+  return body;
 }
 
 async function route(req, res) {
@@ -203,18 +270,30 @@ async function route(req, res) {
     return sendJson(res, 200, { projects: await listProjects() });
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/github/repos') {
+    return sendJson(res, 200, { repos: await githubRepos() });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/clone') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    return sendJson(res, 200, { output: await cloneAndStart(body.repo) });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/create') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    return sendJson(res, 200, { output: await createAndStart(body.name, body.private !== false) });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/running') {
     return sendJson(res, 200, { running: await listRunning() });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
-    let body;
-    try {
-      body = await json(req);
-    } catch {
-      return sendJson(res, 400, { error: 'expected a JSON body' });
-    }
-    if (!Number.isInteger(body?.pid)) {
+    const body = await readJson(req, res);
+    if (!body) return;
+    if (!Number.isInteger(body.pid)) {
       return sendJson(res, 400, { error: 'missing "pid"' });
     }
     return sendJson(res, 200, { output: await stopSession(body.pid) });
@@ -227,13 +306,9 @@ async function route(req, res) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/start') {
-    let body;
-    try {
-      body = await json(req);
-    } catch {
-      return sendJson(res, 400, { error: 'expected a JSON body' });
-    }
-    if (typeof body?.project !== 'string' || !body.project) {
+    const body = await readJson(req, res);
+    if (!body) return;
+    if (typeof body.project !== 'string' || !body.project) {
       return sendJson(res, 400, { error: 'missing "project"' });
     }
     const session = typeof body.session === 'string' ? body.session : undefined;
