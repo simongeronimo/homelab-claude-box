@@ -1,0 +1,9 @@
+services:
+  claude-box:
+    build:
+      context: /mnt/Apps/claude-box/repo
+    container_name: claude-box
+    volumes:
+      - /mnt/Apps/claude-box/home:/root
+    init: true
+    restart: unless-stopped
