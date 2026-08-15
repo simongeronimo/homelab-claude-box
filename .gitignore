@@ -1,6 +1,9 @@
 # Claude Code machine-local settings
 .claude/settings.local.json
 
+# Local dev container state — holds Claude and GitHub credentials
+data/
+
 # Secrets — never commit tokens, keys, or credentials
 .env
 *.pem

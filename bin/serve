@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# PID 1 for the container.
+#
+# The launcher must not be PID 1 itself: if PID 1 exits the container stops,
+# and every tmux session running a Claude conversation dies with it. A crash
+# in the web app would take out all your work. Supervising it here means a
+# crash costs two seconds and nothing else.
+
+set -u
+
+while true; do
+  node /app/server.js || echo "launcher exited ($?), restarting in 2s" >&2
+  sleep 2
+done

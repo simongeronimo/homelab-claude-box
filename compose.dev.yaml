@@ -1,0 +1,27 @@
+# Local development. Builds from this directory instead of pulling a release,
+# and bind-mounts the source so edits are live without a rebuild.
+#
+#   docker compose -f compose.dev.yaml up -d --build
+#   docker compose -f compose.dev.yaml exec claude-box bash
+#
+# State lives in ./data/home, which is gitignored — this container has its own
+# Claude and GitHub logins, separate from the NAS.
+
+services:
+  claude-box:
+    build: .
+    container_name: claude-box-dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/home:/root
+      - ./app:/app
+      # Whole directory, not ./bin/start-session:/usr/local/bin/start-session.
+      # A single-file bind mount pins an inode, and most editors save by
+      # replacing the file — so the container would keep serving the version
+      # that existed when it started, silently. Mounted somewhere of its own
+      # rather than over /usr/local/bin, which holds node and npm.
+      - ./bin:/opt/bin
+    environment:
+      PATH: /opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    init: true

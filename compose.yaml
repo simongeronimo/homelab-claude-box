@@ -3,7 +3,15 @@ services:
     image: ghcr.io/simongeronimo/homelab-claude-box:latest
     pull_policy: always
     container_name: claude-box
+    ports:
+      - "8080:8080"
     volumes:
       - /mnt/Apps/claude-box/home:/root
     init: true
     restart: unless-stopped
+    # Blast radius for a runaway agent: a fork bomb or a build that eats all
+    # the RAM kills this container instead of the NAS. Raise mem_limit if you
+    # run many concurrent sessions — hitting it kills the running ones.
+    pids_limit: 1024
+    mem_limit: 8g
+    security_opt: [ "no-new-privileges:true" ]
