@@ -387,10 +387,6 @@ function projectCard(project) {
   name.querySelector('.name').textContent = project.name;
   name.querySelector('.when').textContent = ago(project.lastUsed);
 
-  const resume = document.createElement('button');
-  resume.className = 'ghost';
-  resume.textContent = 'Resume';
-
   const start = document.createElement('button');
   start.textContent = 'Start';
   start.addEventListener('click', () => launch(project.name, null, start));
@@ -398,11 +394,20 @@ function projectCard(project) {
   const sessions = document.createElement('div');
   sessions.className = 'sessions';
 
-  resume.addEventListener('click', () => toggleSessions(project.name, sessions, resume));
-
   const actions = document.createElement('div');
   actions.className = 'actions';
-  actions.append(resume, start);
+
+  // lastUsed is 0 when the project has no transcripts, so there is nothing to
+  // resume and the button would only ever open an empty list.
+  if (project.lastUsed) {
+    const resume = document.createElement('button');
+    resume.className = 'ghost';
+    resume.textContent = 'Resume';
+    resume.addEventListener('click', () => toggleSessions(project.name, sessions, resume));
+    actions.append(resume);
+  }
+
+  actions.append(start);
 
   row.append(name, actions);
   li.append(row, sessions);
@@ -468,10 +473,16 @@ async function launch(project, sessionId, button) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `start returned ${res.status}`);
     say(`${data.output}\nOpen the Claude app to continue.`);
-    setTimeout(loadRunning, 2000); // Claude takes a moment to register
+
+    // Deliberately not re-enabled. start-session returns once tmux is up, in
+    // well under a second, but Claude needs about ten more to register — and
+    // multiple sessions per project are allowed, so a second tap in that gap
+    // silently starts a second session. Reload once it has registered, which
+    // both re-renders this card and shows the session under Running.
+    button.textContent = 'Started';
+    setTimeout(load, 10000);
   } catch (err) {
     say(`Could not start ${project}: ${err.message}`);
-  } finally {
     button.disabled = false;
     button.textContent = label;
   }

@@ -262,8 +262,12 @@ async function route(req, res) {
   const url = new URL(req.url, 'http://localhost');
 
   if (req.method === 'GET' && url.pathname === '/') {
+    // Read first, then write the header. writeHead before the await means a
+    // failed read leaves headersSent true, the error handler declines to
+    // respond, and the request hangs until the browser gives up.
+    const html = await fsp.readFile(path.join(__dirname, 'index.html'));
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    return res.end(await fsp.readFile(path.join(__dirname, 'index.html')));
+    return res.end(html);
   }
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {

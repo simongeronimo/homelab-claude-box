@@ -8,6 +8,20 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-15
+
+### Fixed
+
+- Tapping Start twice started two sessions. `start-session` returns as soon as
+  tmux is up, in well under a second, but Claude needs about ten more to
+  register — so the button re-enabled while nothing had visibly changed. It now
+  stays disabled and reads "Started" until the list refreshes.
+- Resume is hidden for projects that have never been used. There are no
+  transcripts to offer, so the button only ever opened an empty list.
+- A failed read of `index.html` hung the request instead of returning 500. The
+  handler wrote the response header before awaiting the file, so `headersSent`
+  was already true and the error handler declined to answer.
+
 ## [0.1.0] - 2026-08-15
 
 ### Added
@@ -72,6 +86,7 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/simongeronimo/homelab-claude-box/releases/tag/v0.0.1
