@@ -3,6 +3,8 @@ services:
     image: ghcr.io/simongeronimo/homelab-claude-box:latest
     pull_policy: always
     container_name: claude-box
+    ports:
+      - "8080:8080"
     volumes:
       - /mnt/Apps/claude-box/home:/root
     init: true

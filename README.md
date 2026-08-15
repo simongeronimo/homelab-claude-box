@@ -56,6 +56,32 @@ enabled inside a detached `tmux` session, so it outlives the caller — a Remote
 Control session dies with its process. The session then appears in the Code tab of
 the Claude app.
 
+## Development
+
+Run a local container built from the working tree, with its own state in
+`./data/home` and its own logins:
+
+```bash
+docker compose -f compose.dev.yaml up -d --build
+docker compose -f compose.dev.yaml exec claude-box claude auth login
+```
+
+`app/` and `bin/` are bind-mounted, so edits take effect without a rebuild.
+Reload the launcher after changing `server.js`:
+
+```bash
+docker compose -f compose.dev.yaml exec claude-box sh -c 'kill $(cat /run/launcher.pid)'
+```
+
+`bin/serve` restarts it within two seconds. Don't use `docker compose restart`
+for this — restarting the container destroys every running session, which is the
+thing `bin/serve` exists to prevent.
+
+`index.html` needs nothing at all; it is read from disk on each request.
+
+Rebuild only when the Dockerfile changes. Put some git repositories in
+`data/home/github/` to have something to launch.
+
 ## Updating
 
 Push to `main`. GitHub Actions builds the image and pushes it to `ghcr.io`, then

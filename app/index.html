@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Claude Box</title>
+<style>
+  :root {
+    --bg: #f2f4f7;
+    --card: #ffffff;
+    --text: #161b22;
+    --muted: #59646f;
+    --line: #d9e0e7;
+    --accent: #a94d26;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141a;
+      --card: #171d25;
+      --text: #dde3ea;
+      --muted: #8a97a5;
+      --line: #252d38;
+      --accent: #e0855a;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: env(safe-area-inset-top) 16px 48px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main { max-width: 620px; margin: 0 auto; }
+
+  h1 {
+    font-size: 20px;
+    font-weight: 650;
+    margin: 28px 0 20px;
+    letter-spacing: -0.01em;
+  }
+
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+
+  li {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14.5px;
+    overflow-wrap: anywhere;
+  }
+
+  .when {
+    display: block;
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 3px;
+  }
+
+  .actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  button.ghost {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--line);
+    padding: 10px 14px;
+  }
+
+  .sessions {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .sessions:empty { display: none; }
+
+  .session {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: left;
+    width: 100%;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-weight: 400;
+  }
+  .session:hover { border-color: var(--accent); }
+
+  .label { font-size: 14px; overflow-wrap: anywhere; }
+  .session .when { margin-top: 2px; }
+
+  h2 {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+
+  #running { margin-bottom: 28px; }
+  #running:empty { display: none; }
+
+  .dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #2f9e63;
+    margin-right: 7px;
+    vertical-align: middle;
+  }
+  .dot.working { background: #d3a03e; }
+
+  button.stop { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button.stop:hover { color: #c0392b; border-color: #c0392b; }
+
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 18px;
+    cursor: pointer;
+    min-height: 42px;
+    white-space: nowrap;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .note {
+    color: var(--muted);
+    font-size: 14px;
+    padding: 20px 2px;
+  }
+
+  #status {
+    margin-top: 20px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  #status:empty { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Claude Box</h1>
+  <div id="running"></div>
+  <div id="list"><p class="note">Loading…</p></div>
+  <div id="status" role="status" aria-live="polite"></div>
+</main>
+
+<script>
+const list = document.getElementById('list');
+const runningEl = document.getElementById('running');
+const status = document.getElementById('status');
+
+function say(message) {
+  status.textContent = message;
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/projects');
+    if (!res.ok) throw new Error(`projects returned ${res.status}`);
+    const { projects } = await res.json();
+    render(projects);
+  } catch (err) {
+    list.innerHTML = '';
+    say(`Could not load projects: ${err.message}`);
+  }
+  loadRunning();
+}
+
+async function loadRunning() {
+  try {
+    const res = await fetch('/api/running');
+    const { running } = await res.json();
+    if (!res.ok || running.length === 0) {
+      runningEl.replaceChildren();
+      return;
+    }
+
+    const heading = document.createElement('h2');
+    heading.textContent = `Running (${running.length})`;
+
+    const ul = document.createElement('ul');
+    for (const session of running) {
+      ul.append(runningCard(session));
+    }
+
+    runningEl.replaceChildren(heading, ul);
+  } catch {
+    runningEl.replaceChildren(); // not worth an error banner
+  }
+}
+
+function runningCard(session) {
+  const li = document.createElement('li');
+
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const text = document.createElement('div');
+  text.innerHTML = '<span class="dot"></span><span class="name"></span><span class="when"></span>';
+  text.querySelector('.name').textContent = session.name;
+  text.querySelector('.when').textContent = `${session.project} · ${session.status}`;
+  if (session.status === 'working') text.querySelector('.dot').classList.add('working');
+
+  const stop = document.createElement('button');
+  stop.className = 'stop';
+  stop.textContent = 'Stop';
+  stop.addEventListener('click', () => stopSession(session, stop));
+
+  row.append(text, stop);
+  li.append(row);
+  return li;
+}
+
+async function stopSession(session, button) {
+  button.disabled = true;
+  button.textContent = 'Stopping…';
+
+  try {
+    const res = await fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pid: session.pid }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `stop returned ${res.status}`);
+    say(data.output);
+    setTimeout(load, 500); // give the process a moment to actually go
+  } catch (err) {
+    say(`Could not stop ${session.name}: ${err.message}`);
+    button.disabled = false;
+    button.textContent = 'Stop';
+  }
+}
+
+const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const UNITS = [
+  ['year', 31536000],
+  ['month', 2592000],
+  ['week', 604800],
+  ['day', 86400],
+  ['hour', 3600],
+  ['minute', 60],
+];
+
+function ago(ms) {
+  if (!ms) return 'never used';
+  const seconds = (ms - Date.now()) / 1000;
+  for (const [unit, size] of UNITS) {
+    if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
+  }
+  return rtf.format(Math.round(seconds), 'second');
+}
+
+function render(projects) {
+  if (!projects || projects.length === 0) {
+    list.innerHTML = '<p class="note">No projects found. Clone one into the projects directory to get started.</p>';
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  for (const project of projects) {
+    ul.append(projectCard(project));
+  }
+
+  list.innerHTML = '';
+  list.append(ul);
+}
+
+function projectCard(project) {
+  const li = document.createElement('li');
+
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const name = document.createElement('div');
+  name.innerHTML = '<span class="name"></span><span class="when"></span>';
+  name.querySelector('.name').textContent = project.name;
+  name.querySelector('.when').textContent = ago(project.lastUsed);
+
+  const resume = document.createElement('button');
+  resume.className = 'ghost';
+  resume.textContent = 'Resume';
+
+  const start = document.createElement('button');
+  start.textContent = 'Start';
+  start.addEventListener('click', () => launch(project.name, null, start));
+
+  const sessions = document.createElement('div');
+  sessions.className = 'sessions';
+
+  resume.addEventListener('click', () => toggleSessions(project.name, sessions, resume));
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  actions.append(resume, start);
+
+  row.append(name, actions);
+  li.append(row, sessions);
+  return li;
+}
+
+async function toggleSessions(project, container, button) {
+  if (container.childElementCount > 0) {
+    container.replaceChildren();
+    button.textContent = 'Resume';
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const res = await fetch(`/api/sessions?project=${encodeURIComponent(project)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `sessions returned ${res.status}`);
+
+    if (data.sessions.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'note';
+      empty.textContent = 'No past sessions.';
+      container.append(empty);
+    } else {
+      for (const session of data.sessions) {
+        container.append(sessionButton(project, session));
+      }
+    }
+    button.textContent = 'Hide';
+  } catch (err) {
+    say(`Could not load sessions: ${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function sessionButton(project, session) {
+  const button = document.createElement('button');
+  button.className = 'session';
+
+  const text = document.createElement('span');
+  text.innerHTML = '<span class="label"></span><span class="when"></span>';
+  text.querySelector('.label').textContent = session.label || '(no prompt recorded)';
+  text.querySelector('.when').textContent = ago(session.lastUsed);
+
+  button.append(text);
+  button.addEventListener('click', () => launch(project, session.id, button));
+  return button;
+}
+
+async function launch(project, sessionId, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  say(sessionId ? `Resuming ${project}…` : `Starting ${project}…`);
+
+  try {
+    const res = await fetch('/api/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project, session: sessionId || undefined }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `start returned ${res.status}`);
+    say(`${data.output}\nOpen the Claude app to continue.`);
+    setTimeout(loadRunning, 2000); // Claude takes a moment to register
+  } catch (err) {
+    say(`Could not start ${project}: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+load();
+</script>
+</body>
+</html>
