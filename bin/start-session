@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Start a Claude Code session with Remote Control enabled, in a project
+# directory, inside a detached tmux session so it outlives the caller.
+#
+# usage: start-session <project>
+
+set -euo pipefail
+
+PROJECTS_DIR=/root/github
+
+if [ $# -ne 1 ]; then
+  echo "usage: start-session <project>" >&2
+  exit 2
+fi
+
+NAME=$1
+
+# This is called from a web app, so treat the name as untrusted input.
+# Reject anything that could escape PROJECTS_DIR or confuse tmux.
+case $NAME in
+  "" | .* | *[!A-Za-z0-9._-]*)
+    echo "invalid project name: $NAME" >&2
+    exit 2
+    ;;
+esac
+
+DIR="$PROJECTS_DIR/$NAME"
+
+if [ ! -d "$DIR" ]; then
+  echo "no such project: $DIR" >&2
+  exit 1
+fi
+
+# How many Claude sessions are already running in this directory? Counting
+# rather than testing existence, so the multi-session feature only has to
+# delete the block below instead of rewriting this.
+RUNNING=$(claude agents --json 2>/dev/null \
+  | jq --arg dir "$DIR" '[.[] | select(.cwd == $dir)] | length' 2>/dev/null \
+  || echo 0)
+
+# tmux session names must be unique. Suffix if the base name is taken, so
+# names read as myproject, myproject-2, myproject-3.
+# The = prefix forces an exact match; without it tmux matches on prefix and
+# "myproject" would find "myproject-2".
+SESSION=$NAME
+if tmux has-session -t "=$SESSION" 2>/dev/null; then
+  n=2
+  while tmux has-session -t "=$NAME-$n" 2>/dev/null; do
+    n=$((n + 1))
+  done
+  SESSION="$NAME-$n"
+fi
+
+tmux new-session -d -s "$SESSION" -c "$DIR" "claude --remote-control '$SESSION'"
+
+echo "started $SESSION in $DIR"

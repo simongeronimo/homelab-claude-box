@@ -1,7 +1,7 @@
 services:
   claude-box:
-    build:
-      context: /mnt/Apps/claude-box/repo
+    image: ghcr.io/simongeronimo/homelab-claude-box:latest
+    pull_policy: always
     container_name: claude-box
     volumes:
       - /mnt/Apps/claude-box/home:/root
