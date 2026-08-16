@@ -7,6 +7,12 @@ services:
       - "8080:8080"
     volumes:
       - /mnt/Apps/claude-box/home:/root
+    # ntfy has no accounts, so this topic name is the only thing keeping your
+    # notifications yours — anyone who knows it can read them and post to them.
+    # Treat it like a password: keep it long and random, and change it here if
+    # it ever leaks. Unset it to turn the feature off.
+    environment:
+      NTFY_TOPIC: claude-box-u2qo77qvkxob
     init: true
     restart: unless-stopped
     # Blast radius for a runaway agent: a fork bomb or a build that eats all

@@ -289,6 +289,21 @@
     color: var(--muted);
   }
 
+  button.remind {
+    margin-top: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 12px;
+    min-height: 0;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--line);
+  }
+  button.remind.on {
+    color: #2f9e63;
+    border-color: #2f9e63;
+  }
+
   .dot {
     display: inline-block;
     width: 7px;
@@ -531,11 +546,16 @@ async function stopSession(session, button) {
 
 const usageEl = document.getElementById('usage');
 
+// Whether the box can send a notification at all, and whether one is pending.
+let notify = { enabled: false, remindAt: null };
+let lastLimits = [];
+
 async function loadUsage() {
   try {
     const res = await fetch('/api/usage');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `usage returned ${res.status}`);
+    notify = data.notify || notify;
     renderUsage(data.limits);
   } catch {
     // The endpoint behind this is internal and unsupported, so treat it as
@@ -544,7 +564,8 @@ async function loadUsage() {
   }
 }
 
-function renderUsage(limits) {
+function renderUsage(limits = lastLimits) {
+  lastLimits = limits;
   if (!limits || limits.length === 0) {
     usageEl.replaceChildren();
     return;
@@ -585,7 +606,44 @@ function limitBar(limit) {
     reset.textContent = `Resets ${resetLabel(limit.resetsAt)}`;
     wrap.append(reset);
   }
+
+  // Only the five hour window, and only once it is worth worrying about —
+  // "getting close" is the account's own severity, not a threshold guessed
+  // here. Still shown once a reminder is set, so it can be called off.
+  const worthOffering = limit.severity !== 'normal' || notify.remindAt;
+  if (limit.kind === 'session' && notify.enabled && limit.resetsAt && worthOffering) {
+    wrap.append(remindButton());
+  }
   return wrap;
+}
+
+function remindButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = notify.remindAt ? 'remind on' : 'remind';
+  button.textContent = notify.remindAt ? '✓ Reminder set — tap to cancel' : 'Notify me when it resets';
+
+  button.addEventListener('click', async () => {
+    const turningOn = !notify.remindAt;
+    button.disabled = true;
+    try {
+      const res = await fetch('/api/remind', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ on: turningOn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `remind returned ${res.status}`);
+      notify.remindAt = data.remindAt;
+      say(turningOn ? `You'll get a notification at ${resetLabel(data.remindAt)}.` : 'Reminder cancelled.');
+      renderUsage();
+    } catch (err) {
+      say(`Could not set the reminder: ${err.message}`);
+      button.disabled = false;
+    }
+  });
+
+  return button;
 }
 
 const resetTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
