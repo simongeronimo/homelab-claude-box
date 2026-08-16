@@ -9,6 +9,19 @@
 
 set -u
 
+# Install the image's skills into the home dataset.
+#
+# This can't happen at build time: the dataset mounts over /root, so anything
+# written to ~/.claude during the build is hidden the moment the container
+# starts. Here the mount exists.
+#
+# Skills the image ships are overwritten, so a rebuild is how you update them.
+# Anything else in ~/.claude/skills is left alone, so your own skills survive.
+if [ -d /opt/skills ]; then
+  mkdir -p /root/.claude/skills
+  cp -r /opt/skills/. /root/.claude/skills/
+fi
+
 while true; do
   node /app/server.js || echo "launcher exited ($?), restarting in 2s" >&2
   sleep 2
