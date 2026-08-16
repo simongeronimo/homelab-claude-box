@@ -315,6 +315,17 @@ async function route(req, res) {
     return res.end(html);
   }
 
+  if (req.method === 'GET' && url.pathname === '/icon.svg') {
+    const svg = await fsp.readFile(path.join(__dirname, 'icon.svg'));
+    // The icon only changes when the image does, and the browser asks for it
+    // on every visit, so let it keep one for the day.
+    res.writeHead(200, {
+      'content-type': 'image/svg+xml',
+      'cache-control': 'public, max-age=86400',
+    });
+    return res.end(svg);
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     return sendJson(res, 200, { projects: await listProjects() });
   }
