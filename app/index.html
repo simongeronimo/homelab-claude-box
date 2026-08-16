@@ -77,6 +77,89 @@
     gap: 12px;
   }
 
+  /* --- Swipe to delete --------------------------------------------------- */
+
+  li.project { padding: 0; position: relative; overflow: hidden; }
+
+  li.project .front {
+    position: relative;
+    background: var(--card);
+    padding: 14px 16px;
+    transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  li.project.dragging .front { transition: none; }
+  li.project.open .front { transform: translateX(76px); }
+  /* Swipe is touch-only, so keyboard focus has to reveal it too. */
+  li.project:has(.trash:focus-visible) .front { transform: translateX(76px); }
+
+  .behind {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 76px;
+    display: flex;
+    background: #c0392b;
+  }
+
+  button.trash {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    color: #fff;
+    padding: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  button.trash:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
+
+  /* --- Delete confirmation ----------------------------------------------- */
+
+  dialog {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--text);
+    padding: 20px;
+    max-width: 400px;
+    width: calc(100% - 32px);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+
+  dialog h3 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .risk {
+    margin: 0 0 12px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  .risk.bad { color: #c0392b; font-weight: 600; }
+
+  .warn {
+    margin: 0 0 18px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(192, 57, 43, 0.1);
+    border: 1px solid rgba(192, 57, 43, 0.35);
+    font-size: 13.5px;
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin: 0;
+  }
+  button.danger { background: #c0392b; }
+
   .name {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 14.5px;
@@ -323,6 +406,19 @@
   </details>
 
   <div id="status" role="status" aria-live="polite"></div>
+
+  <dialog id="confirm">
+    <h3>Delete <span id="confirm-name"></span>?</h3>
+    <p class="risk" id="confirm-risk"></p>
+    <p class="warn">
+      If this project isn't backed up on GitHub, you will lose this data.
+      The directory is removed from the box permanently and this can't be undone.
+    </p>
+    <form method="dialog" class="dialog-actions">
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="delete" class="danger">Delete</button>
+    </form>
+  </dialog>
 </main>
 
 <script>
@@ -526,8 +622,14 @@ function render(projects) {
   list.append(ul);
 }
 
+const TRASH_ICON =
+  '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>';
+
 function projectCard(project) {
   const li = document.createElement('li');
+  li.className = 'project';
 
   const row = document.createElement('div');
   row.className = 'row';
@@ -560,8 +662,167 @@ function projectCard(project) {
   actions.append(start);
 
   row.append(name, actions);
-  li.append(row, sessions);
+
+  const behind = document.createElement('div');
+  behind.className = 'behind';
+  const trash = document.createElement('button');
+  trash.type = 'button';
+  trash.className = 'trash';
+  trash.setAttribute('aria-label', `Delete ${project.name}`);
+  trash.innerHTML = TRASH_ICON;
+  trash.addEventListener('click', () => askDelete(project.name));
+  behind.append(trash);
+
+  const front = document.createElement('div');
+  front.className = 'front';
+  front.append(row, sessions);
+
+  li.append(behind, front);
+  makeSwipeable(li, front);
   return li;
+}
+
+const SWIPE_OPEN = 76; // matches .behind's width
+
+/**
+ * Swipe right to reveal the delete button.
+ *
+ * Pointer events rather than touch events, so a mouse drag works the same way.
+ * The gesture commits to an axis on the first few pixels of movement: if the
+ * finger is going down the page, this lets go entirely and the page scrolls,
+ * which otherwise makes the whole list feel stuck.
+ */
+function makeSwipeable(li, front) {
+  let startX = 0;
+  let startY = 0;
+  let offset = 0;
+  let tracking = false;
+  let horizontal = false;
+
+  front.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    startX = event.clientX;
+    startY = event.clientY;
+    offset = li.classList.contains('open') ? SWIPE_OPEN : 0;
+    tracking = true;
+    horizontal = false;
+  });
+
+  front.addEventListener('pointermove', (event) => {
+    if (!tracking) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+
+    if (!horizontal) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return; // still ambiguous
+      if (Math.abs(dy) > Math.abs(dx)) {
+        tracking = false; // a scroll, not a swipe
+        return;
+      }
+      horizontal = true;
+      li.classList.add('dragging');
+      front.setPointerCapture(event.pointerId);
+    }
+
+    // Clamped, with a little past the stop so the gesture doesn't feel walled.
+    offset = Math.max(0, Math.min(SWIPE_OPEN + 20, dx + (li.classList.contains('open') ? SWIPE_OPEN : 0)));
+    front.style.transform = `translateX(${offset}px)`;
+  });
+
+  const settle = () => {
+    if (!tracking) return;
+    tracking = false;
+    li.classList.remove('dragging');
+    front.style.transform = '';
+    if (!horizontal) return; // a tap; leave the row as it was
+    setOpen(li, offset > SWIPE_OPEN / 2);
+  };
+
+  front.addEventListener('pointerup', settle);
+  front.addEventListener('pointercancel', settle);
+}
+
+/** One row open at a time, the way a mail list behaves. */
+function setOpen(li, open) {
+  if (open) {
+    for (const other of document.querySelectorAll('li.project.open')) {
+      if (other !== li) other.classList.remove('open');
+    }
+  }
+  li.classList.toggle('open', open);
+}
+
+const confirmDialog = document.getElementById('confirm');
+
+/**
+ * What deleting this would actually cost, in the project's own terms. A
+ * generic "this can't be undone" is easy to click past; "3 commits have never
+ * been pushed" is not.
+ */
+function riskText(risk) {
+  if (!risk.isRepo) {
+    return { text: 'Not a git repository — nothing here is backed up anywhere.', bad: true };
+  }
+
+  const losses = [];
+  if (!risk.remote) losses.push('no GitHub remote, so nothing has ever been pushed');
+  if (risk.unpushed) losses.push(`${risk.unpushed} commit${risk.unpushed === 1 ? '' : 's'} not pushed`);
+  if (risk.uncommitted) {
+    losses.push(`${risk.uncommitted} file${risk.uncommitted === 1 ? '' : 's'} with uncommitted changes`);
+  }
+
+  if (losses.length === 0) {
+    return { text: `Everything is committed and pushed to ${risk.remote}.`, bad: false };
+  }
+  return { text: `You would lose: ${losses.join(', ')}.`, bad: true };
+}
+
+async function askDelete(project) {
+  document.getElementById('confirm-name').textContent = project;
+
+  const riskEl = document.getElementById('confirm-risk');
+  riskEl.textContent = 'Checking what is backed up…';
+  riskEl.className = 'risk';
+  confirmDialog.showModal();
+
+  try {
+    const res = await fetch(`/api/risk?project=${encodeURIComponent(project)}`);
+    const risk = await res.json();
+    if (!res.ok) throw new Error(risk.error || `risk returned ${res.status}`);
+    const { text, bad } = riskText(risk);
+    riskEl.textContent = text;
+    riskEl.className = bad ? 'risk bad' : 'risk';
+  } catch (err) {
+    // Failing to check is itself a reason for caution, so say so rather than
+    // quietly showing nothing.
+    riskEl.textContent = `Could not check what is backed up: ${err.message}`;
+    riskEl.className = 'risk bad';
+  }
+
+  confirmDialog.addEventListener(
+    'close',
+    () => {
+      if (confirmDialog.returnValue === 'delete') doDelete(project);
+    },
+    { once: true },
+  );
+}
+
+async function doDelete(project) {
+  say(`Deleting ${project}…`);
+  try {
+    const res = await fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `delete returned ${res.status}`);
+    say(data.output);
+    load();
+  } catch (err) {
+    say(`Could not delete ${project}: ${err.message}`);
+  }
 }
 
 async function toggleSessions(project, container, button) {
