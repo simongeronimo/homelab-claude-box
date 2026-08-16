@@ -15,6 +15,17 @@ const PROJECTS_DIR = '/root/github';
 const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const USAGE_TTL_MS = 60_000;
 
+/**
+ * The PNG is for iOS: added to the Home Screen it ignores SVG icons entirely,
+ * and without an apple-touch-icon it uses a screenshot of the page instead.
+ * It is opaque and square-cornered on purpose — iOS renders transparency as
+ * black and applies its own corner mask.
+ */
+const ICONS = {
+  '/icon.svg': { file: 'icon.svg', type: 'image/svg+xml' },
+  '/apple-touch-icon.png': { file: 'apple-touch-icon.png', type: 'image/png' },
+};
+
 const exists = (p) => fsp.access(p).then(() => true, () => false);
 
 const repoName = (nameWithOwner) => nameWithOwner.split('/').pop();
@@ -315,15 +326,16 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === 'GET' && url.pathname === '/icon.svg') {
-    const svg = await fsp.readFile(path.join(__dirname, 'icon.svg'));
-    // The icon only changes when the image does, and the browser asks for it
-    // on every visit, so let it keep one for the day.
+  // The icons only change when the image does, and a browser asks for them on
+  // every visit, so let it keep them for the day.
+  const icon = ICONS[url.pathname];
+  if (req.method === 'GET' && icon) {
+    const body = await fsp.readFile(path.join(__dirname, icon.file));
     res.writeHead(200, {
-      'content-type': 'image/svg+xml',
+      'content-type': icon.type,
       'cache-control': 'public, max-age=86400',
     });
-    return res.end(svg);
+    return res.end(body);
   }
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {
