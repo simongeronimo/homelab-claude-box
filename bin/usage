@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+//
+// Print the account's current rate limit usage as JSON — the same numbers the
+// Claude app shows in its usage bars.
+//
+// usage: usage
+//
+// There is no supported way to get this. `claude` has no usage subcommand and
+// nothing on disk records utilisation, so this calls the endpoint the CLI
+// itself uses, with the CLI's own OAuth token. That endpoint is internal and
+// undocumented: a Claude Code update may change or remove it, in which case
+// this exits non-zero and the launcher hides the panel rather than showing a
+// stale or wrong number.
+//
+// The token is read here and sent to Anthropic and nowhere else. It is never
+// printed, and the launcher only ever forwards the parsed numbers.
+
+'use strict';
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const CREDENTIALS = path.join(os.homedir(), '.claude', '.credentials.json');
+const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
+const OAUTH_BETA = 'oauth-2025-04-20';
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function token() {
+  let raw;
+  try {
+    raw = fs.readFileSync(CREDENTIALS, 'utf8');
+  } catch {
+    fail(`cannot read ${CREDENTIALS} — is Claude logged in on this box?`);
+  }
+
+  let oauth;
+  try {
+    oauth = JSON.parse(raw).claudeAiOauth;
+  } catch {
+    fail(`${CREDENTIALS} is not valid JSON`);
+  }
+
+  if (!oauth?.accessToken) fail('no OAuth access token — run `claude` and log in');
+
+  // Claude Code refreshes the token when it runs; this script deliberately
+  // does not, so it can never write to the credentials file that sessions
+  // depend on. An expired token is reported and left alone.
+  if (oauth.expiresAt && Date.now() >= oauth.expiresAt) {
+    fail('OAuth token has expired — start a Claude session to refresh it');
+  }
+
+  return oauth.accessToken;
+}
+
+async function main() {
+  const response = await fetch(ENDPOINT, {
+    headers: {
+      Authorization: `Bearer ${token()}`,
+      'anthropic-beta': OAUTH_BETA,
+    },
+  }).catch((err) => fail(`cannot reach ${ENDPOINT}: ${err.message}`));
+
+  const body = await response.text();
+  if (!response.ok) fail(`usage endpoint returned ${response.status}: ${body.slice(0, 200)}`);
+
+  try {
+    JSON.parse(body); // fail loudly here rather than in the browser
+  } catch {
+    fail(`usage endpoint returned something that is not JSON: ${body.slice(0, 200)}`);
+  }
+
+  process.stdout.write(body);
+}
+
+main();

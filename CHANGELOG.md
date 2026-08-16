@@ -8,6 +8,24 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+### Added
+
+- The Claude app's usage bars, at the top of the launcher: the five hour
+  session window and the weekly limits, with the percentage used and when each
+  resets. The numbers come from the account, so they match what the app shows
+  rather than being estimated from anything local.
+- `bin/usage`, which prints those numbers as JSON. There is no supported way to
+  get them — `claude` has no usage subcommand and nothing on disk records
+  utilisation — so it calls the same internal endpoint the CLI uses, with the
+  CLI's own OAuth token. **That endpoint is undocumented and may change or
+  disappear in any Claude Code release**, in which case the script exits
+  non-zero and the launcher hides the panel rather than showing a stale number.
+- The token is read only by that script, which sends it to Anthropic and
+  nowhere else, never prints it, and never writes back to the credentials file
+  that running sessions depend on. `GET /api/usage` forwards only the parsed
+  percentages, and caches them for a minute so a page load costs at most one
+  round trip.
+
 ## [0.1.1] - 2026-08-15
 
 ### Fixed

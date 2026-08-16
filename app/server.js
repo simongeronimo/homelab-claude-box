@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.PORT || 8080);
 const PROJECTS_DIR = '/root/github';
 const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const USAGE_TTL_MS = 60_000;
 
 const exists = (p) => fsp.access(p).then(() => true, () => false);
 
@@ -128,6 +129,50 @@ async function listProjects() {
   return projects
     .filter(Boolean)
     .sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name));
+}
+
+/**
+ * The account's rate limit usage — the numbers behind the Claude app's usage
+ * bars: the five hour session window, and the weekly limits.
+ *
+ * Shelled out to `usage` rather than fetched here, so the OAuth token stays
+ * inside one small script and never enters the web server, which is the thing
+ * listening on the network.
+ *
+ * Cached, because this is a round trip to Anthropic and the launcher's own
+ * page load already fans out to several endpoints. A minute-old reading of a
+ * five hour window is still the right reading.
+ */
+let usageCache = { at: 0, value: null };
+
+async function usage() {
+  if (usageCache.value && Date.now() - usageCache.at < USAGE_TTL_MS) return usageCache.value;
+
+  const raw = JSON.parse(await run('usage', []));
+
+  // `limits` is the endpoint's own normalised view — the same list the app
+  // renders, already carrying only the bars that apply to this account. The
+  // wider response has a slot per limit kind, mostly null.
+  const value = {
+    limits: (raw.limits ?? [])
+      .filter((l) => typeof l.percent === 'number')
+      .map((l) => ({
+        label: limitLabel(l),
+        percent: l.percent,
+        severity: l.severity ?? 'normal',
+        resetsAt: l.resets_at ? Date.parse(l.resets_at) : null,
+      })),
+  };
+
+  usageCache = { at: Date.now(), value };
+  return value;
+}
+
+/** The labels the Claude app itself uses. */
+function limitLabel(limit) {
+  if (limit.kind === 'session') return 'Current session';
+  const model = limit.scope?.model?.display_name;
+  return model ? `Current week (${model} only)` : 'Current week (all models)';
 }
 
 /** Live sessions, as Claude itself reports them. */
@@ -272,6 +317,10 @@ async function route(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     return sendJson(res, 200, { projects: await listProjects() });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/usage') {
+    return sendJson(res, 200, await usage());
   }
 
   if (req.method === 'GET' && url.pathname === '/api/github/repos') {

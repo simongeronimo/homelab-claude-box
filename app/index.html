@@ -124,6 +124,59 @@
   #running { margin-bottom: 28px; }
   #running:empty { display: none; }
 
+  #usage { margin-bottom: 28px; }
+  #usage:empty { display: none; }
+
+  .usage-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .limit-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .limit-label { font-size: 14px; }
+
+  .limit-pct {
+    font-size: 14px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .track {
+    height: 8px;
+    margin-top: 8px;
+    border-radius: 4px;
+    background: var(--line);
+    overflow: hidden;
+  }
+
+  .fill {
+    height: 100%;
+    border-radius: 4px;
+    min-width: 2px;
+    background: var(--accent);
+  }
+  /* Status steps, fixed rather than themed. The percentage sits beside every
+     bar, so colour is never the only thing saying how close you are. */
+  .fill.warning { background: #fab219; }
+  .fill.critical { background: #d03b3b; }
+
+  .limit-reset {
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
   .dot {
     display: inline-block;
     width: 7px;
@@ -232,6 +285,7 @@
 <body>
 <main>
   <h1>Claude Box</h1>
+  <div id="usage"></div>
   <div id="running"></div>
   <div id="list"><p class="note">Loading…</p></div>
 
@@ -274,6 +328,7 @@ async function load() {
     say(`Could not load projects: ${err.message}`);
   }
   loadRunning();
+  loadUsage();
 }
 
 async function loadRunning() {
@@ -340,6 +395,84 @@ async function stopSession(session, button) {
     button.disabled = false;
     button.textContent = 'Stop';
   }
+}
+
+// --- Usage ------------------------------------------------------------------
+//
+// The same bars the Claude app shows: the five hour session window and the
+// weekly limits, as reported by the account itself. Nothing here is derived or
+// estimated — the percentages come from Anthropic.
+
+const usageEl = document.getElementById('usage');
+
+async function loadUsage() {
+  try {
+    const res = await fetch('/api/usage');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `usage returned ${res.status}`);
+    renderUsage(data.limits);
+  } catch {
+    // The endpoint behind this is internal and unsupported, so treat it as
+    // optional: the launcher's actual job is starting sessions.
+    usageEl.replaceChildren();
+  }
+}
+
+function renderUsage(limits) {
+  if (!limits || limits.length === 0) {
+    usageEl.replaceChildren();
+    return;
+  }
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Usage';
+
+  const card = document.createElement('div');
+  card.className = 'usage-card';
+  for (const limit of limits) card.append(limitBar(limit));
+
+  usageEl.replaceChildren(heading, card);
+}
+
+function limitBar(limit) {
+  const wrap = document.createElement('div');
+
+  const head = document.createElement('div');
+  head.className = 'limit-head';
+  head.innerHTML = '<span class="limit-label"></span><span class="limit-pct"></span>';
+  head.querySelector('.limit-label').textContent = limit.label;
+  head.querySelector('.limit-pct').textContent = `${Math.round(limit.percent)}%`;
+
+  const track = document.createElement('div');
+  track.className = 'track';
+  const fill = document.createElement('div');
+  fill.className = 'fill';
+  if (limit.severity !== 'normal') fill.classList.add(limit.severity);
+  fill.style.width = `${Math.min(100, Math.max(0, limit.percent))}%`;
+  track.append(fill);
+
+  wrap.append(head, track);
+
+  if (limit.resetsAt) {
+    const reset = document.createElement('div');
+    reset.className = 'limit-reset';
+    reset.textContent = `Resets ${resetLabel(limit.resetsAt)}`;
+    wrap.append(reset);
+  }
+  return wrap;
+}
+
+const resetTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const resetDay = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+/** A weekly limit resets days out, where a bare clock time would be a lie. */
+function resetLabel(ms) {
+  const sameDay = new Date().toDateString() === new Date(ms).toDateString();
+  return (sameDay ? resetTime : resetDay).format(ms);
 }
 
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
@@ -578,6 +711,10 @@ async function post(path, body, button, pending) {
 }
 
 load();
+
+// Keep the bars live while the page sits open. The server caches for the same
+// interval, so this is at most one call a minute to Anthropic.
+setInterval(loadUsage, 60000);
 </script>
 </body>
 </html>
