@@ -40,10 +40,22 @@
   main { max-width: 620px; margin: 0 auto; }
 
   h1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 20px;
     font-weight: 650;
     margin: 28px 0 20px;
     letter-spacing: -0.01em;
+  }
+
+  /* Sized a little above the cap height, the way a logo sits beside a
+     wordmark. Fixed dimensions so the row doesn't reflow as it loads. */
+  h1 img {
+    width: 26px;
+    height: 26px;
+    display: block;
+    flex-shrink: 0;
   }
 
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -285,7 +297,8 @@
 </head>
 <body>
 <main>
-  <h1>Claude Box</h1>
+  <!-- alt="" — the heading text beside it already says this. -->
+  <h1><img src="/icon.svg" alt="" width="26" height="26">Claude Box</h1>
   <div id="usage"></div>
   <div id="running"></div>
   <div id="list"><p class="note">Loading…</p></div>
