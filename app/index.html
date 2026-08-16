@@ -88,15 +88,15 @@
     transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
   }
   li.project.dragging .front { transition: none; }
-  li.project.open .front { transform: translateX(76px); }
+  li.project.open .front { transform: translateX(-76px); }
   /* Swipe is touch-only, so keyboard focus has to reveal it too. */
-  li.project:has(.trash:focus-visible) .front { transform: translateX(76px); }
+  li.project:has(.trash:focus-visible) .front { transform: translateX(-76px); }
 
   .behind {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 0;
+    right: 0;
     width: 76px;
     display: flex;
     background: #c0392b;
@@ -685,7 +685,7 @@ function projectCard(project) {
 const SWIPE_OPEN = 76; // matches .behind's width
 
 /**
- * Swipe right to reveal the delete button.
+ * Swipe left to reveal the delete button.
  *
  * Pointer events rather than touch events, so a mouse drag works the same way.
  * The gesture commits to an axis on the first few pixels of movement: if the
@@ -724,9 +724,12 @@ function makeSwipeable(li, front) {
       front.setPointerCapture(event.pointerId);
     }
 
-    // Clamped, with a little past the stop so the gesture doesn't feel walled.
-    offset = Math.max(0, Math.min(SWIPE_OPEN + 20, dx + (li.classList.contains('open') ? SWIPE_OPEN : 0)));
-    front.style.transform = `translateX(${offset}px)`;
+    // Travel is measured as a positive distance regardless of direction, so
+    // only this line knows the row opens leftwards. Clamped a little past the
+    // stop so the gesture doesn't feel walled.
+    const travel = -dx + (li.classList.contains('open') ? SWIPE_OPEN : 0);
+    offset = Math.max(0, Math.min(SWIPE_OPEN + 20, travel));
+    front.style.transform = `translateX(${-offset}px)`;
   });
 
   const settle = () => {
