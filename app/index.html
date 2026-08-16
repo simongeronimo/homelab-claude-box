@@ -38,7 +38,16 @@
     color: var(--text);
     font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
+    /* No rubber-band bounce when the page already fits. */
+    overscroll-behavior-y: none;
   }
+
+  /* Nothing here is ever wider than the viewport; if something ever is, that
+     is a bug to fix rather than a sideways scroll to live with. */
+  html { overflow-x: hidden; }
+
+  /* The page behind a modal has no business moving. */
+  body:has(dialog[open]) { overflow: hidden; }
 
   main { max-width: 620px; margin: 0 auto; }
 
@@ -86,6 +95,10 @@
     background: var(--card);
     padding: 14px 16px;
     transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+    /* Vertical panning stays the browser's, horizontal is ours. Without this
+       the browser claims a sideways drag as a scroll, so the page shifts under
+       the finger and the swipe dies mid-gesture with a pointercancel. */
+    touch-action: pan-y;
   }
   li.project.dragging .front { transition: none; }
   li.project.open .front { transform: translateX(-76px); }
