@@ -272,6 +272,79 @@ async function createAndStart(name, isPrivate) {
   return startSession(name);
 }
 
+/**
+ * What you would lose by deleting this project, so the confirmation can say
+ * something specific instead of a generic warning.
+ *
+ * Every check is best effort: a directory that isn't a git repository at all
+ * is the most dangerous case, not an error, and it reports as such.
+ */
+async function projectRisk(name) {
+  if (!isValidName(name)) throw new Error(`invalid project name: ${name}`);
+  const cwd = path.join(PROJECTS_DIR, name);
+
+  const git = async (args) => {
+    try {
+      return await run('git', ['-C', cwd, ...args]);
+    } catch {
+      return null; // not a repository, or git had nothing to say
+    }
+  };
+
+  const [remote, status, unpushed] = await Promise.all([
+    git(['remote', 'get-url', 'origin']),
+    git(['status', '--porcelain']),
+    // Commits on any local branch that no remote has. Empty when everything
+    // is pushed; null when there are no remotes to compare against.
+    git(['log', '--branches', '--not', '--remotes', '--oneline']),
+  ]);
+
+  const lines = (out) => (out ? out.split('\n').filter(Boolean).length : 0);
+
+  return {
+    isRepo: (await exists(path.join(cwd, '.git'))) === true,
+    remote,
+    uncommitted: lines(status),
+    unpushed: lines(unpushed),
+  };
+}
+
+/**
+ * Delete a project directory, permanently.
+ *
+ * The name arrives from a browser on the LAN, so it is checked rather than
+ * trusted: isValidName already rules out slashes and leading dots, and the
+ * resolved path is required to be a direct child of PROJECTS_DIR, so no input
+ * can reach outside it. lstat, not stat, because a symlink pointing somewhere
+ * else must be refused rather than followed.
+ *
+ * Refused while a session is live in the project — pulling the directory out
+ * from under a running Claude is a good way to lose work that was about to be
+ * committed.
+ */
+async function deleteProject(name) {
+  if (!isValidName(name)) throw new Error(`invalid project name: ${name}`);
+
+  const dir = path.resolve(PROJECTS_DIR, name);
+  if (path.dirname(dir) !== path.resolve(PROJECTS_DIR)) {
+    throw new Error(`refusing to delete outside ${PROJECTS_DIR}`);
+  }
+
+  const stat = await fsp.lstat(dir).catch(() => null);
+  if (!stat) throw new Error(`${name} does not exist`);
+  if (!stat.isDirectory()) throw new Error(`${name} is not a directory`);
+
+  const live = (await listRunning()).find((a) => a.project === name);
+  if (live) throw new Error(`${name} has a running session — stop it first`);
+
+  await fsp.rm(dir, { recursive: true, force: true });
+
+  // Transcripts under ~/.claude/projects are deliberately left alone: they are
+  // the history of the work, they cost nothing, and they come back usefully if
+  // the project is ever cloned here again.
+  return `deleted ${name}`;
+}
+
 // ---------------------------------------------------------------------------
 // Plumbing.
 // ---------------------------------------------------------------------------
@@ -373,6 +446,21 @@ async function route(req, res) {
       return sendJson(res, 400, { error: 'missing "pid"' });
     }
     return sendJson(res, 200, { output: await stopSession(body.pid) });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/risk') {
+    const project = url.searchParams.get('project');
+    if (!isValidName(project)) return sendJson(res, 400, { error: 'invalid "project"' });
+    return sendJson(res, 200, await projectRisk(project));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/delete') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    if (typeof body.project !== 'string' || !body.project) {
+      return sendJson(res, 400, { error: 'missing "project"' });
+    }
+    return sendJson(res, 200, { output: await deleteProject(body.project) });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
