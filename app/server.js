@@ -16,6 +16,26 @@ const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const USAGE_TTL_MS = 60_000;
 
 /**
+ * ntfy publishes to a topic name with no account behind it, so the topic is
+ * the password — it has to be unguessable, and it is set per box rather than
+ * committed with a default anyone could read here. Unset disables the feature
+ * and hides the button rather than failing when it is pressed.
+ */
+const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
+const NTFY_URL = process.env.NTFY_URL || 'https://ntfy.sh';
+
+/**
+ * A pending reminder outlives the process on purpose. The launcher restarts on
+ * crash and on every reload, and an in-memory timer would go with it — leaving
+ * a reminder that was promised and silently never arrives, which is the one
+ * failure you cannot notice.
+ */
+const REMINDER_FILE = path.join(os.homedir(), '.claude-box', 'reminder.json');
+
+/** Past this, a missed reminder is stale news rather than a late one. */
+const REMINDER_GRACE_MS = 60 * 60 * 1000;
+
+/**
  * The PNG is for iOS: added to the Home Screen it ignores SVG icons entirely,
  * and without an apple-touch-icon it uses a screenshot of the page instead.
  * It is opaque and square-cornered on purpose — iOS renders transparency as
@@ -168,6 +188,7 @@ async function usage() {
     limits: (raw.limits ?? [])
       .filter((l) => typeof l.percent === 'number')
       .map((l) => ({
+        kind: l.kind,
         label: limitLabel(l),
         percent: l.percent,
         severity: l.severity ?? 'normal',
@@ -177,6 +198,90 @@ async function usage() {
 
   usageCache = { at: Date.now(), value };
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// "Tell me when the five hour window resets."
+// ---------------------------------------------------------------------------
+
+let reminderTimer = null;
+let reminderAt = null;
+
+async function writeReminder(at) {
+  reminderAt = at;
+  if (!at) return fsp.rm(REMINDER_FILE, { force: true });
+  await fsp.mkdir(path.dirname(REMINDER_FILE), { recursive: true });
+  await fsp.writeFile(REMINDER_FILE, JSON.stringify({ at }));
+}
+
+async function publish(title, message) {
+  const res = await fetch(`${NTFY_URL}/${NTFY_TOPIC}`, {
+    method: 'POST',
+    headers: { Title: title, Priority: 'high', Tags: 'sparkles' },
+    body: message,
+  });
+  if (!res.ok) throw new Error(`ntfy returned ${res.status}`);
+}
+
+async function fireReminder() {
+  try {
+    await publish('Claude Box', 'Your five hour window has reset — you can continue.');
+    console.log('reminder sent');
+  } catch (err) {
+    // Nothing useful to retry against: the window has reset either way, and a
+    // retry loop would outlive the thing it is about.
+    console.error('reminder failed to send:', err.message);
+  }
+  await writeReminder(null);
+}
+
+function armReminder(at) {
+  clearTimeout(reminderTimer);
+  reminderTimer = setTimeout(fireReminder, Math.max(0, at - Date.now()));
+}
+
+/** Arm or cancel the reminder for the window that is open now. */
+async function setReminder(on) {
+  if (!NTFY_TOPIC) throw new Error('notifications are not configured — set NTFY_TOPIC');
+
+  if (!on) {
+    clearTimeout(reminderTimer);
+    await writeReminder(null);
+    return { remindAt: null };
+  }
+
+  // The reset time is taken from the account rather than from the browser, so
+  // a request cannot ask to be woken at an arbitrary time.
+  const session = (await usage()).limits.find((l) => l.kind === 'session');
+  if (!session?.resetsAt) throw new Error('no five hour window is open');
+
+  armReminder(session.resetsAt);
+  await writeReminder(session.resetsAt);
+  return { remindAt: session.resetsAt };
+}
+
+/** Re-arm across a restart, which is the whole point of persisting it. */
+async function restoreReminder() {
+  const raw = await fsp.readFile(REMINDER_FILE, 'utf8').catch(() => null);
+  if (!raw) return;
+
+  let at;
+  try {
+    at = JSON.parse(raw).at;
+  } catch {
+    return writeReminder(null);
+  }
+  if (!Number.isFinite(at)) return writeReminder(null);
+
+  const late = Date.now() - at;
+  if (late < 0) {
+    reminderAt = at;
+    return armReminder(at);
+  }
+  // It came due while the launcher was down. Still worth saying if it only
+  // just happened; otherwise drop it rather than announce old news.
+  if (late < REMINDER_GRACE_MS) return fireReminder();
+  return writeReminder(null);
 }
 
 /** The labels the Claude app itself uses. */
@@ -416,7 +521,18 @@ async function route(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/usage') {
-    return sendJson(res, 200, await usage());
+    // Reminder state rides along rather than getting its own request: the page
+    // already asks for this, and it is cheap and uncached.
+    return sendJson(res, 200, {
+      ...(await usage()),
+      notify: { enabled: Boolean(NTFY_TOPIC), remindAt: reminderAt },
+    });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/remind') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    return sendJson(res, 200, await setReminder(body.on !== false));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/github/repos') {
@@ -494,4 +610,5 @@ http
     // Restarting the container would work too, and would kill every session.
     require('node:fs').writeFileSync('/run/launcher.pid', String(process.pid));
     console.log(`launcher on ${PORT}, projects in ${PROJECTS_DIR}`);
+    restoreReminder().catch((err) => console.error('could not restore reminder:', err.message));
   });
