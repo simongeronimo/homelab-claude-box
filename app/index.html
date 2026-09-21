@@ -236,6 +236,106 @@
   #running { margin-bottom: 28px; }
   #running:empty { display: none; }
 
+
+  /* --- Login status ------------------------------------------------------ */
+
+  #status-panel { margin-bottom: 20px; }
+  #status-panel:empty { display: none; }
+
+  .status-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 14px;
+  }
+
+  .svc {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+  }
+  .svc + .svc { border-top: 1px solid var(--line); }
+
+  .svc-mark {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .svc.ok .svc-mark { color: #2f9e63; }
+  .svc.bad .svc-mark { color: #c0392b; }
+  .svc.unknown .svc-mark { color: var(--muted); }
+
+  .svc-text { flex: 1; min-width: 0; font-size: 13.5px; }
+  .svc-who {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 1px;
+    overflow-wrap: anywhere;
+  }
+  .svc.bad .svc-who { color: #c0392b; }
+
+  button.signin {
+    flex-shrink: 0;
+    font-size: 13px;
+    padding: 7px 12px;
+    min-height: 0;
+  }
+
+  /* --- Sign-in dialog ---------------------------------------------------- */
+
+  .step {
+    margin: 0 0 14px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  .bigcode {
+    display: block;
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-align: center;
+    color: var(--text);
+  }
+
+  .golink {
+    display: block;
+    margin: 12px 0;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  #code-input {
+    width: 100%;
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  #code-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
   #usage { margin-bottom: 28px; }
   #usage:empty { display: none; }
 
@@ -413,6 +513,7 @@
 <main>
   <!-- alt="" — the heading text beside it already says this. -->
   <h1><img src="/icon.svg" alt="" width="26" height="26">Claude Box</h1>
+  <div id="status-panel"></div>
   <div id="usage"></div>
   <div id="running"></div>
   <div id="list"><p class="note">Loading…</p></div>
@@ -434,6 +535,15 @@
   </details>
 
   <div id="status" role="status" aria-live="polite"></div>
+
+  <dialog id="signin">
+    <h3 id="signin-title">Sign in</h3>
+    <p class="step" id="signin-step">Starting…</p>
+    <div id="signin-body"></div>
+    <form method="dialog" class="dialog-actions">
+      <button value="cancel" class="ghost">Close</button>
+    </form>
+  </dialog>
 
   <dialog id="confirm">
     <h3>Delete <span id="confirm-name"></span>?</h3>
@@ -470,6 +580,7 @@ async function load() {
   }
   loadRunning();
   loadUsage();
+  loadStatus();
 }
 
 async function loadRunning() {
@@ -536,6 +647,231 @@ async function stopSession(session, button) {
     button.disabled = false;
     button.textContent = 'Stop';
   }
+}
+
+// --- Login status -----------------------------------------------------------
+//
+// The launcher is useless if either login has lapsed, and the way you used to
+// find out was a session that started, looked fine, and never appeared on your
+// phone. So both are checked against the services themselves and shown up
+// front, and both can be signed back in from here.
+
+const statusPanel = document.getElementById('status-panel');
+const signinDialog = document.getElementById('signin');
+
+const SERVICES = [
+  { key: 'claude', name: 'Claude', note: 'Remote Control needs this' },
+  { key: 'github', name: 'GitHub', note: 'cloning, creating and pushing need this' },
+];
+
+async function loadStatus(fresh = false) {
+  try {
+    const data = await (await fetch(`/api/status${fresh ? '?fresh=1' : ''}`)).json();
+    renderStatus(data);
+  } catch {
+    statusPanel.replaceChildren(); // never let this break the page
+  }
+}
+
+function renderStatus(data) {
+  const card = document.createElement('div');
+  card.className = 'status-card';
+  for (const svc of SERVICES) card.append(serviceRow(svc, data[svc.key]));
+  statusPanel.replaceChildren(card);
+}
+
+/** Days left, but only once it is close enough to be worth saying. */
+function expiryNote(expiresAt) {
+  if (!expiresAt) return '';
+  const days = Math.floor((expiresAt - Date.now()) / 86400000);
+  if (days > 7) return '';
+  return days <= 0 ? ' · expires today' : ` · expires in ${days} day${days === 1 ? '' : 's'}`;
+}
+
+/**
+ * Three states, not two: signed in, definitely signed out, and could-not-tell.
+ * Collapsing the last into "signed out" would cry wolf every time the box was
+ * briefly offline or throttled.
+ */
+function serviceRow(svc, state) {
+  const signedOut = state && !state.ok && state.certain;
+  const unknown = !state || (!state.ok && !state.certain);
+
+  const row = document.createElement('div');
+  row.className = `svc ${state && state.ok ? 'ok' : signedOut ? 'bad' : 'unknown'}`;
+
+  const mark = document.createElement('span');
+  mark.className = 'svc-mark';
+  mark.textContent = state && state.ok ? '✓' : signedOut ? '✕' : '?';
+  mark.setAttribute('aria-hidden', 'true');
+
+  const text = document.createElement('div');
+  text.className = 'svc-text';
+  const title = document.createElement('span');
+  // The tick carries no meaning on its own — the state is spelled out too, for
+  // a reader that never sees the colour.
+  title.textContent = state && state.ok
+    ? `${svc.name} signed in`
+    : signedOut
+      ? `${svc.name} signed out`
+      : `${svc.name} — could not check`;
+
+  const who = document.createElement('span');
+  who.className = 'svc-who';
+  who.textContent = state && state.ok
+    ? `${state.who || 'connected'}${expiryNote(state.expiresAt)}`
+    : signedOut
+      ? `${state.detail || 'not signed in'} — ${svc.note}`
+      : `${(state && state.detail) || 'checking…'}`;
+  text.append(title, who);
+
+  row.append(mark, text);
+
+  // Only offer to sign in when it is actually signed out; offer a retry when
+  // the check itself failed, since signing in would not be the fix.
+  if (signedOut) {
+    const button = document.createElement('button');
+    button.className = 'signin';
+    button.textContent = 'Sign in';
+    button.addEventListener('click', () => beginSignin(svc));
+    row.append(button);
+  } else if (unknown && state) {
+    const button = document.createElement('button');
+    button.className = 'signin ghost';
+    button.textContent = 'Retry';
+    button.addEventListener('click', () => loadStatus(true));
+    row.append(button);
+  }
+  return row;
+}
+
+// --- Signing in from the phone ----------------------------------------------
+
+let pollTimer = null;
+
+function signinStep(text) {
+  document.getElementById('signin-step').textContent = text;
+}
+
+async function beginSignin(svc) {
+  document.getElementById('signin-title').textContent = `Sign in to ${svc.name}`;
+  document.getElementById('signin-body').replaceChildren();
+  signinStep('Starting…');
+  signinDialog.showModal();
+
+  // Stop polling as soon as it closes, however it closed.
+  signinDialog.addEventListener('close', () => clearInterval(pollTimer), { once: true });
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ service: svc.key }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `sign-in returned ${res.status}`);
+    showSigninStep(svc, data);
+  } catch (err) {
+    signinStep(`Could not start sign-in: ${err.message}`);
+  }
+}
+
+function showSigninStep(svc, data) {
+  const body = document.getElementById('signin-body');
+  body.replaceChildren();
+
+  if (data.code) {
+    // GitHub: the code is entered on github.com, never sent back through here.
+    signinStep('Open this on your phone and enter the code:');
+    const code = document.createElement('span');
+    code.className = 'bigcode';
+    code.textContent = data.code;
+    const link = document.createElement('a');
+    link.className = 'golink';
+    link.href = data.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Open github.com/login/device';
+    body.append(code, link);
+    pollUntilDone(svc);
+    return;
+  }
+
+  if (data.url) {
+    // Claude: approve on the phone, then paste the code it hands back.
+    signinStep('Open this on your phone, approve, then paste the code it gives you:');
+    const link = document.createElement('a');
+    link.className = 'golink';
+    link.href = data.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Open the Claude sign-in page';
+
+    const input = document.createElement('input');
+    input.id = 'code-input';
+    input.placeholder = 'Paste the code here';
+    input.autocapitalize = 'off';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+
+    const submit = document.createElement('button');
+    submit.textContent = 'Finish sign-in';
+    submit.addEventListener('click', async () => {
+      const code = input.value.trim();
+      if (!code) return;
+      submit.disabled = true;
+      signinStep('Finishing…');
+      try {
+        const res = await fetch('/api/login/code', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ service: svc.key, code }),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || `sign-in returned ${res.status}`);
+        settleSignin(svc, result);
+      } catch (err) {
+        signinStep(`Could not finish: ${err.message}`);
+        submit.disabled = false;
+      }
+    });
+
+    body.append(link, input, submit);
+    return;
+  }
+
+  signinStep('Waiting…');
+  pollUntilDone(svc);
+}
+
+function pollUntilDone(svc) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const state = await (await fetch(`/api/login?service=${encodeURIComponent(svc.key)}`)).json();
+      if (state.state === 'waiting') return;
+      settleSignin(svc, state);
+    } catch {
+      // A blip while polling is not worth tearing the dialog down for.
+    }
+  }, 3000);
+}
+
+function settleSignin(svc, state) {
+  clearInterval(pollTimer);
+  if (state.state === 'done') {
+    signinStep(`${svc.name} is signed in.`);
+    document.getElementById('signin-body').replaceChildren();
+    loadStatus(true);
+    load();
+    setTimeout(() => signinDialog.close(), 1200);
+    return;
+  }
+  if (state.state === 'failed') {
+    signinStep(`Sign-in failed: ${state.message || 'unknown error'}`);
+    return;
+  }
+  signinStep('Still waiting — finish it on your phone.');
 }
 
 // --- Usage ------------------------------------------------------------------
