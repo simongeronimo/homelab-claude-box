@@ -10,7 +10,8 @@ const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
 
-const PORT = Number(process.env.PORT || 8080);
+const DEFAULT_PORT = 8080;
+const PORT = Number(process.env.PORT || DEFAULT_PORT);
 const PROJECTS_DIR = '/root/github';
 const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const USAGE_TTL_MS = 60_000;
@@ -34,6 +35,12 @@ const REMINDER_FILE = path.join(os.homedir(), '.claude-box', 'reminder.json');
 
 /** Past this, a missed reminder is stale news rather than a late one. */
 const REMINDER_GRACE_MS = 60 * 60 * 1000;
+
+/** Where Claude keeps the OAuth token that Remote Control depends on. */
+const CREDENTIALS = path.join(os.homedir(), '.claude', '.credentials.json');
+
+/** Login checks hit the network, so they are cached like the usage bars. */
+const STATUS_TTL_MS = 30_000;
 
 /**
  * The PNG is for iOS: added to the Home Screen it ignores SVG icons entirely,
@@ -327,6 +334,14 @@ async function stopSession(pid) {
  * command. start-session validates the name as well.
  */
 async function startSession(name, sessionId) {
+  // A stale Claude token still lets tmux come up and start-session report
+  // success, but Remote Control never connects — so the session sits there
+  // looking alive and is unreachable from the phone. Refuse up front and say
+  // why, rather than handing back a success that cannot be used.
+  const { claude } = await authStatus();
+  if (!claude.ok && claude.certain) {
+    throw new Error('Claude is signed out, so Remote Control would never connect. Sign in from the status panel first.');
+  }
   return run('start-session', sessionId ? [name, sessionId] : [name]);
 }
 
@@ -451,6 +466,231 @@ async function deleteProject(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Are the logins still good, and signing back in without a terminal.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether each login still works, checked against the services themselves
+ * rather than trusted from a file on disk.
+ *
+ * This exists because of one specific failure: a Claude token that has gone
+ * stale still lets a session start — tmux comes up, start-session prints
+ * success — but Remote Control never connects, so the session looks alive in
+ * the launcher and is unreachable from the phone. Nothing about that is
+ * visible until you go looking, which is the worst way to find out.
+ */
+let statusCache = { at: 0, value: null };
+
+async function authStatus({ fresh = false } = {}) {
+  if (!fresh && statusCache.value && Date.now() - statusCache.at < STATUS_TTL_MS) {
+    return statusCache.value;
+  }
+  const [claude, github] = await Promise.all([claudeStatus(), githubStatus()]);
+  const value = { claude, github };
+  statusCache = { at: Date.now(), value };
+  return value;
+}
+
+/**
+ * The access token in the credentials file expires every few hours and Claude
+ * refreshes it by itself, so its expiry says nothing useful. The date that
+ * actually ends the login is the refresh token's.
+ */
+async function claudeExpiry() {
+  try {
+    const raw = await fsp.readFile(CREDENTIALS, 'utf8');
+    return JSON.parse(raw).claudeAiOauth?.refreshTokenExpiresAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function claudeStatus() {
+  const expiresAt = await claudeExpiry();
+  try {
+    // usage() is a real call to Anthropic with the same OAuth token Remote
+    // Control uses, and it is already cached for the usage bars — so this
+    // proves the token works rather than only that a file exists, and costs
+    // nothing extra.
+    await usage();
+    const who = JSON.parse(await run('claude', ['auth', 'status'])).email ?? null;
+    return { ok: true, certain: true, who, expiresAt };
+  } catch (err) {
+    return { ...authFailure(err.message), who: null, expiresAt };
+  }
+}
+
+async function githubStatus() {
+  try {
+    return { ok: true, certain: true, who: await run('gh', ['api', 'user', '--jq', '.login']) };
+  } catch (err) {
+    return { ...authFailure(err.message), who: null };
+  }
+}
+
+const firstLine = (text) => String(text || '').split('\n')[0].slice(0, 200);
+
+/**
+ * Not signed in, or merely unable to tell?
+ *
+ * Worth separating: a failed *check* is not a failed login. A rate-limited or
+ * offline box would otherwise report both services dead and refuse to start
+ * any session at all — breaking the launcher precisely when you cannot get to
+ * a terminal to argue with it. Only a definite rejection is certain; anything
+ * unrecognised fails open, because wrongly blocking costs more than the zombie
+ * session this guard exists to prevent.
+ */
+function authFailure(message) {
+  const text = String(message || '');
+  if (/401|authentication_error|invalid bearer|expired/i.test(text)) {
+    return { ok: false, certain: true, detail: 'session expired' };
+  }
+  if (/gh auth login|not logged in|no longer valid|bad credentials/i.test(text)) {
+    return { ok: false, certain: true, detail: 'not signed in' };
+  }
+  if (/429|rate.?limit/i.test(text)) {
+    return { ok: false, certain: false, detail: 'rate limited, could not check' };
+  }
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|fetch failed/i.test(text)) {
+    return { ok: false, certain: false, detail: 'offline, could not check' };
+  }
+  return { ok: false, certain: false, detail: firstLine(text) };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Signing in from a phone.
+ *
+ * Both CLIs only know how to log in at a terminal, so each is run inside a
+ * detached tmux session and driven through its pane: read what it printed,
+ * show that to the browser, type the answer back. Neither secret ever reaches
+ * the page — GitHub's code is entered at github.com, and Claude's code is
+ * exchanged by the CLI itself.
+ */
+const LOGIN = {
+  github: {
+    session: 'login-github',
+    command: 'gh auth login --hostname github.com --git-protocol https --web',
+    // "! First copy your one-time code: 54D1-8449"
+    read: (pane) => {
+      const code = pane.match(/one-time code:\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})/i)?.[1];
+      return code ? { code, url: 'https://github.com/login/device' } : null;
+    },
+    // On a box where git is not wired to gh yet, this is asked before the
+    // code is ever printed, and the flow simply stops until it is answered.
+    prompts: [
+      // The usual case here: the host entry still exists, its token is just
+      // dead, so gh asks before replacing it.
+      [/already logged into .*Do you want to re-authenticate/s, 'y'],
+      // And this one when git is not wired to gh yet.
+      [/Authenticate Git with your GitHub credentials\?/, 'y'],
+    ],
+    // gh then waits on "Press Enter to open github.com in your browser..."
+    // before it starts polling, and there is no browser here to open.
+    press: 'Enter',
+  },
+  claude: {
+    session: 'login-claude',
+    command: 'claude auth login --claudeai',
+    // The redirect goes to a hosted callback rather than localhost, so the
+    // whole approval happens on the phone and comes back as a code to paste.
+    read: (pane) => {
+      const url = pane.match(/https:\/\/claude\.com\/\S+/)?.[0];
+      return url ? { url } : null;
+    },
+    needsCode: true,
+  },
+};
+
+const DONE = 'LOGIN-FINISHED-';
+
+/** tmux hard-wraps long lines; -J rejoins them so a URL comes back whole. */
+async function pane(session) {
+  return run('tmux', ['capture-pane', '-p', '-J', '-t', session]).catch(() => '');
+}
+
+async function startLogin(service) {
+  const cfg = LOGIN[service];
+  if (!cfg) throw new Error(`unknown service: ${service}`);
+
+  await run('tmux', ['kill-session', '-t', cfg.session]).catch(() => {});
+  // -e HOME: a tmux session inherits the tmux *server's* environment, not
+  // this process's, and that server may long predate us. Without this the CLI
+  // can end up reading a different home than the one being repaired.
+  await run('tmux', [
+    'new-session', '-d', '-x', '200', '-y', '50',
+    '-e', `HOME=${os.homedir()}`,
+    '-s', cfg.session,
+    `${cfg.command}; echo ${DONE}$?; sleep 900`,
+  ]);
+
+  // Wait for it to print the thing the phone needs, answering anything it
+  // asks on the way — these CLIs stop dead on an unanswered prompt, and there
+  // is nobody at this terminal to notice.
+  const answered = new Set();
+  for (let i = 0; i < 40; i++) {
+    await sleep(400);
+    const text = await pane(cfg.session);
+
+    for (const [pattern, key] of cfg.prompts ?? []) {
+      if (answered.has(String(pattern)) || !pattern.test(text)) continue;
+      answered.add(String(pattern));
+      await run('tmux', ['send-keys', '-t', cfg.session, key, 'Enter']);
+    }
+
+    const seen = cfg.read(text);
+    if (!seen) continue;
+    if (cfg.press) await run('tmux', ['send-keys', '-t', cfg.session, cfg.press]);
+    return { state: 'waiting', needsCode: Boolean(cfg.needsCode), ...seen };
+  }
+
+  await run('tmux', ['kill-session', '-t', cfg.session]).catch(() => {});
+  throw new Error(`${service} sign-in did not start`);
+}
+
+async function loginState(service) {
+  const cfg = LOGIN[service];
+  if (!cfg) throw new Error(`unknown service: ${service}`);
+
+  const text = await pane(cfg.session);
+  if (!text) return { state: 'idle' };
+
+  const finished = text.match(new RegExp(`${DONE}(\\d+)`));
+  if (!finished) {
+    return { state: 'waiting', needsCode: Boolean(cfg.needsCode), ...(cfg.read(text) || {}) };
+  }
+
+  const ok = finished[1] === '0';
+  await run('tmux', ['kill-session', '-t', cfg.session]).catch(() => {});
+  statusCache = { at: 0, value: null }; // the answer just changed
+  if (!ok) return { state: 'failed', message: firstLine(text.split(DONE)[0].trim().split('\n').pop()) };
+  return { state: 'done', message: 'Signed in.' };
+}
+
+/**
+ * Hand a code back to the waiting CLI.
+ *
+ * It arrives from a browser and is typed into a terminal, so it is checked
+ * rather than trusted, and sent with -l: without it tmux reads names like
+ * "Enter" and "C-c" as keystrokes instead of text.
+ */
+async function submitLoginCode(service, code) {
+  const cfg = LOGIN[service];
+  if (!cfg?.needsCode) throw new Error(`${service} sign-in does not take a code`);
+  if (!/^[A-Za-z0-9._~#/+=-]{8,512}$/.test(code || '')) throw new Error('that does not look like a sign-in code');
+
+  await run('tmux', ['send-keys', '-l', '-t', cfg.session, code]);
+  await run('tmux', ['send-keys', '-t', cfg.session, 'Enter']);
+
+  for (let i = 0; i < 25; i++) {
+    await sleep(400);
+    const state = await loginState(service);
+    if (state.state !== 'waiting') return state;
+  }
+  return { state: 'waiting', needsCode: true };
+}
+
+// ---------------------------------------------------------------------------
 // Plumbing.
 // ---------------------------------------------------------------------------
 
@@ -514,6 +754,26 @@ async function route(req, res) {
       'cache-control': 'public, max-age=86400',
     });
     return res.end(body);
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/status') {
+    return sendJson(res, 200, await authStatus({ fresh: url.searchParams.get('fresh') === '1' }));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/login') {
+    return sendJson(res, 200, await loginState(url.searchParams.get('service')));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/login') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    return sendJson(res, 200, await startLogin(body.service));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/login/code') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    return sendJson(res, 200, await submitLoginCode(body.service, body.code));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {
@@ -608,7 +868,14 @@ http
   .listen(PORT, () => {
     // So a reload is `kill $(cat /run/launcher.pid)` using the shell builtin.
     // Restarting the container would work too, and would kill every session.
-    require('node:fs').writeFileSync('/run/launcher.pid', String(process.pid));
+    //
+    // Only the instance on the real port claims it. A second instance started
+    // on another port — a test run — used to overwrite it, so the next reload
+    // signalled a process that had already exited while the real launcher kept
+    // serving stale code, with nothing to say anything was wrong.
+    if (PORT === DEFAULT_PORT) {
+      require('node:fs').writeFileSync('/run/launcher.pid', String(process.pid));
+    }
     console.log(`launcher on ${PORT}, projects in ${PROJECTS_DIR}`);
     restoreReminder().catch((err) => console.error('could not restore reminder:', err.message));
   });
