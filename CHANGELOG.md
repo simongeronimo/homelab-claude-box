@@ -8,6 +8,15 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-24
+
+### Fixed
+
+- A persona session still stopped on "Allow external CLAUDE.md file
+  imports?". Claude looks up that approval under the git root, not the folder
+  the session starts in, so setting it on the persona folder alone did
+  nothing. `start-session` now sets it on the repository root as well.
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
@@ -178,7 +187,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...v0.2.0
