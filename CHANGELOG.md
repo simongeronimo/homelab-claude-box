@@ -8,6 +8,8 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-24
+
 ### Added
 
 - The Claude app's usage bars, at the top of the launcher: the five hour
@@ -25,6 +27,39 @@ Image tags matching each version are published to
   that running sessions depend on. `GET /api/usage` forwards only the parsed
   percentages, and caches them for a minute so a page load costs at most one
   round trip.
+- A login status panel at the top of the launcher. It checks the Claude and
+  GitHub logins against the services themselves, not the files on disk, and
+  shows a third state when the check itself fails, so a briefly offline box
+  doesn't report both as signed out. Starting a session is refused while Claude
+  is definitely signed out, since Remote Control would never connect.
+- Signing back in from the phone. GitHub shows a one-time code to enter at
+  github.com. Claude opens its sign-in page and takes the code it hands back.
+  Each CLI runs in a detached tmux session driven through its pane, and neither
+  secret passes through the page.
+- "Notify me when it resets" on the five hour bar, once the account says the
+  window is close to its limit. The notification goes through ntfy to the topic
+  set in `NTFY_TOPIC`, and the button is hidden when that is unset. Reminders
+  are saved to the home dataset, so they survive a reload or a crash.
+- Swipe a project left to delete it. The confirmation says what would be lost:
+  commits not pushed, files with uncommitted changes, no remote, or not a git
+  repository at all. The server refuses symlinks, paths outside the projects
+  directory and projects with a live session.
+- Placeholder cards while the project list and the GitHub repository list
+  load, in place of the "Loading…" text.
+- A favicon, the box icon in the page header, and an `apple-touch-icon` so a
+  Home Screen shortcut on iOS shows the icon instead of a screenshot.
+- The ponytail skills ship with the image, pinned to `PONYTAIL_VERSION`
+  (v4.9.0). `bin/serve` copies them into `~/.claude/skills` at startup,
+  because the home dataset mounts over anything the build puts there.
+
+### Fixed
+
+- A sideways drag on a project card scrolled the page and cancelled the swipe.
+  The page also bounced when it had nothing to scroll, and moved behind an open
+  dialog.
+- A test launcher on another port overwrote `/run/launcher.pid`, so the next
+  reload signalled a process that had already exited. Only the instance on the
+  real port writes it now.
 
 ## [0.1.1] - 2026-08-15
 
@@ -104,7 +139,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/simongeronimo/homelab-claude-box/releases/tag/v0.0.1
