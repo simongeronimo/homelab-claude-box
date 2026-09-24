@@ -74,12 +74,18 @@ mkdir -p "$HOME/.claude"
 [ -e "$CONFIG" ] || echo '{"hasCompletedOnboarding":true}' > "$CONFIG"
 [ -e "$HOME/.claude/settings.json" ] || echo '{"theme":"dark"}' > "$HOME/.claude/settings.json"
 
+# Claude looks up the import approval under the git root, not the folder the
+# session starts in, so a persona's approval is set on the repository too.
+# Set only on the persona folder, the prompt still appears.
+ROOT=$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || echo "$DIR")
+
 TMP=$(mktemp)
-jq --arg dir "$DIR" \
+jq --arg dir "$DIR" --arg root "$ROOT" \
   '.hasCompletedOnboarding = true
-   | .projects[$dir].hasTrustDialogAccepted = true
-   | .projects[$dir].hasClaudeMdExternalIncludesApproved = true
-   | .projects[$dir].hasClaudeMdExternalIncludesWarningShown = true' \
+   | reduce ($dir, $root) as $d (.;
+       .projects[$d].hasTrustDialogAccepted = true
+       | .projects[$d].hasClaudeMdExternalIncludesApproved = true
+       | .projects[$d].hasClaudeMdExternalIncludesWarningShown = true)' \
   "$CONFIG" > "$TMP" && mv "$TMP" "$CONFIG"
 
 if [ -n "$SESSION_ID" ]; then
