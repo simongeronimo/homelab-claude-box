@@ -495,6 +495,22 @@
     padding: 20px 2px;
   }
 
+  /* --- Loading placeholders --------------------------------------------- */
+
+  .skel {
+    display: block;
+    border-radius: 4px;
+    background: var(--line);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .skel-name { width: 55%; height: 14px; margin: 4px 0; }
+  .skel-when { width: 28%; height: 10px; margin-top: 9px; }
+  .skel-button { width: 64px; height: 42px; border-radius: 8px; flex-shrink: 0; }
+  .skeleton .row > div { flex: 1; }
+
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
   #status {
     margin-top: 20px;
     padding: 12px 14px;
@@ -516,7 +532,7 @@
   <div id="status-panel"></div>
   <div id="usage"></div>
   <div id="running"></div>
-  <div id="list"><p class="note">Loading…</p></div>
+  <div id="list"></div>
 
   <details id="add">
     <summary>Add a project</summary>
@@ -531,7 +547,7 @@
       <button type="submit">Create</button>
     </form>
 
-    <div id="repos"><p class="note">Loading your repositories…</p></div>
+    <div id="repos"></div>
   </details>
 
   <div id="status" role="status" aria-live="polite"></div>
@@ -567,6 +583,24 @@ const status = document.getElementById('status');
 function say(message) {
   status.textContent = message;
 }
+
+/** Grey cards the shape of the real ones, so the list doesn't jump when it lands. */
+function skeleton(count) {
+  const ul = document.createElement('ul');
+  ul.className = 'skeleton';
+  ul.setAttribute('aria-label', 'Loading');
+  for (let i = 0; i < count; i++) {
+    const li = document.createElement('li');
+    li.setAttribute('aria-hidden', 'true');
+    li.innerHTML =
+      '<div class="row"><div><span class="skel skel-name"></span><span class="skel skel-when"></span></div>' +
+      '<span class="skel skel-button"></span></div>';
+    ul.append(li);
+  }
+  return ul;
+}
+
+list.replaceChildren(skeleton(3));
 
 async function load() {
   try {
@@ -1321,6 +1355,7 @@ addEl.addEventListener('toggle', () => {
 
 async function loadRepos() {
   reposLoaded = true;
+  if (!reposEl.querySelector('ul:not(.skeleton)')) reposEl.replaceChildren(skeleton(2));
   try {
     const res = await fetch('/api/github/repos');
     const data = await res.json();
