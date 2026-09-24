@@ -17,6 +17,7 @@
     --muted: #59646f;
     --line: #d9e0e7;
     --accent: #a94d26;
+    --stale: #8a5a00;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -26,6 +27,7 @@
       --muted: #8a97a5;
       --line: #252d38;
       --accent: #e0855a;
+      --stale: #f0b940;
     }
   }
 
@@ -493,6 +495,43 @@
     color: var(--muted);
     font-size: 14px;
     padding: 20px 2px;
+  }
+
+  /* --- Compared with upstream ------------------------------------------ */
+
+  .when.with-sync {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+  }
+  .sync { display: contents; }
+
+  .spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid var(--line);
+    border-top-color: var(--muted);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Slowed, not stopped: a spinner that holds still reads as a hang. */
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+  .badge {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge.stale { color: var(--stale); background: rgba(250, 178, 25, 0.16); }
+  .badge.diverged { color: #c0392b; background: rgba(192, 57, 43, 0.12); }
+
+  button.pull {
+    font-size: 12.5px;
+    padding: 4px 12px;
+    min-height: 30px;
   }
 
   /* --- Loading placeholders --------------------------------------------- */
@@ -1076,9 +1115,11 @@ function projectCard(project) {
   row.className = 'row';
 
   const name = document.createElement('div');
-  name.innerHTML = '<span class="name"></span><span class="when"></span>';
+  name.innerHTML =
+    '<span class="name"></span><span class="when with-sync"><span class="ago"></span><span class="sync"></span></span>';
   name.querySelector('.name').textContent = project.name;
-  name.querySelector('.when').textContent = ago(project.lastUsed);
+  name.querySelector('.ago').textContent = ago(project.lastUsed);
+  checkSync(project.name, name.querySelector('.sync'));
 
   const start = document.createElement('button');
   start.textContent = 'Start';
@@ -1194,6 +1235,126 @@ function setOpen(li, open) {
     }
   }
   li.classList.toggle('open', open);
+}
+
+// --- Compared with upstream -------------------------------------------------
+//
+// Whether each project is behind its remote needs a git fetch, one network
+// round trip per repository. So the list goes up first, each card shows a
+// spinner, and the badges fill in as their fetches come back. Each project is
+// fetched once per page load; the list re-renders after every start and stop,
+// and those reuse what this page load already learned.
+
+const syncStates = new Map(); // project -> 'pending' or the server's answer
+const syncEls = new Map(); // project -> its card's current .sync element
+const syncQueue = [];
+let syncActive = 0;
+
+// The browser opens at most six connections to one host and queues the rest.
+// Three for fetching leaves room for a tap on Start not to wait behind them.
+const SYNC_PARALLEL = 3;
+
+function checkSync(project, el, again = false) {
+  syncEls.set(project, el);
+  if (again) syncStates.delete(project);
+
+  const state = syncStates.get(project);
+  if (state && state !== 'pending') return showSync(project, el, state);
+
+  const spinner = document.createElement('span');
+  spinner.className = 'spinner';
+  spinner.setAttribute('role', 'img');
+  spinner.setAttribute('aria-label', 'Checking for new commits');
+  el.replaceChildren(spinner);
+
+  if (state === 'pending') return; // already queued or in flight
+  syncStates.set(project, 'pending');
+  syncQueue.push(project);
+  drainSync();
+}
+
+function drainSync() {
+  while (syncActive < SYNC_PARALLEL && syncQueue.length > 0) {
+    syncActive++;
+    fetchSync(syncQueue.shift()).finally(() => {
+      syncActive--;
+      drainSync();
+    });
+  }
+}
+
+async function fetchSync(project) {
+  let state;
+  try {
+    const res = await fetch(`/api/sync?project=${encodeURIComponent(project)}`);
+    state = await res.json();
+    if (!res.ok) state = { upstream: '?', fetchError: state.error || `sync returned ${res.status}` };
+  } catch (err) {
+    state = { upstream: '?', fetchError: err.message };
+  }
+  syncStates.set(project, state);
+
+  const el = syncEls.get(project);
+  if (el && el.isConnected) showSync(project, el, state);
+}
+
+function syncBadge(text, className, title) {
+  const badge = document.createElement('span');
+  badge.textContent = text;
+  if (className) badge.className = `badge ${className}`;
+  if (title) badge.title = title;
+  return badge;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function showSync(project, el, s) {
+  el.replaceChildren();
+  if (!s.upstream) return; // a local-only branch has nothing to be behind
+
+  if (s.fetchError) {
+    el.append(syncBadge('could not check for new commits', null, s.fetchError));
+  } else if (s.behind && s.ahead) {
+    el.append(syncBadge(`diverged: ${s.behind} behind, ${s.ahead} ahead`, 'diverged', s.upstream));
+  } else if (s.ahead) {
+    el.append(syncBadge(`${plural(s.ahead, 'commit')} not pushed`, null, s.upstream));
+  } else if (!s.behind) {
+    el.append(syncBadge('✓ up to date', null, s.upstream));
+  } else {
+    el.append(syncBadge(`${s.behind} behind`, 'stale', s.upstream));
+    if (s.dirty) {
+      el.append(syncBadge('uncommitted changes'));
+    } else {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pull';
+      button.textContent = 'Pull';
+      button.addEventListener('click', () => pull(project, button));
+      el.append(button);
+    }
+  }
+}
+
+async function pull(project, button) {
+  button.disabled = true;
+  button.textContent = 'Pulling…';
+  say(`Pulling ${project}…`);
+
+  try {
+    const res = await fetch('/api/pull', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `pull returned ${res.status}`);
+    say(data.output || `${project} is up to date.`);
+    checkSync(project, syncEls.get(project), true);
+  } catch (err) {
+    say(`Could not pull ${project}: ${err.message}`);
+    button.disabled = false;
+    button.textContent = 'Pull';
+  }
 }
 
 const confirmDialog = document.getElementById('confirm');
