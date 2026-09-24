@@ -8,6 +8,21 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
+### Added
+
+- Each project card says whether it is behind GitHub. The list appears first,
+  then every project is fetched in the background, three at a time so a tap on
+  Start never waits behind them, and a spinner on each card turns into a
+  badge: behind, commits not pushed, diverged, up to date, or could not check.
+  A fetch that takes longer than 20 seconds gives up and says so. Each page
+  load fetches once, and the list refreshes after a start or stop reuse it.
+- Pull, on a project that is behind. It runs `git pull --ff-only`, so it can
+  never start a merge or leave conflicts. It is refused while a session is
+  running in the project or there are uncommitted changes, and git refuses a
+  branch that has diverged. `GET /api/sync` and `POST /api/pull` back it.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
@@ -139,7 +154,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.0.1...v0.1.0

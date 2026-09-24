@@ -430,6 +430,71 @@ async function projectRisk(name) {
 }
 
 /**
+ * A fetch that hangs, on a dead network or a remote asking for a password
+ * nobody is there to type, must not hold a badge in "checking" forever.
+ */
+const GIT_NETWORK = {
+  timeout: 20_000,
+  env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+};
+
+/**
+ * How this project's branch compares with its upstream, after fetching it.
+ *
+ * The fetch only updates remote-tracking refs, never the working tree, so it
+ * is safe to run while a session is working in the project. If it fails, the
+ * counts would compare against whatever was fetched last, so none are given
+ * rather than stale ones that look current.
+ */
+async function syncState(name) {
+  if (!isValidName(name)) throw new Error(`invalid project name: ${name}`);
+  const git = (args, opts) => run('git', ['-C', path.join(PROJECTS_DIR, name), ...args], opts);
+
+  let upstream;
+  try {
+    upstream = await git(['rev-parse', '--abbrev-ref', '@{upstream}']);
+  } catch {
+    return { upstream: null }; // a local-only branch, or a detached HEAD
+  }
+
+  try {
+    await git(['fetch', '--quiet'], GIT_NETWORK);
+  } catch (err) {
+    return { upstream, fetchError: err.message };
+  }
+
+  const [counts, status] = await Promise.all([
+    git(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']),
+    git(['status', '--porcelain']),
+  ]);
+  const [ahead, behind] = counts.split(/\s+/).map(Number);
+  return { upstream, ahead, behind, dirty: status !== '' };
+}
+
+/**
+ * Fast-forward a project to its upstream.
+ *
+ * --ff-only, so a pull can never start a merge or leave conflicts for a
+ * phone to resolve: a branch that has diverged is refused by git itself.
+ * Refused while a session is live, since changing files under a working
+ * Claude loses track of what it just read, and with uncommitted changes,
+ * which a pull could overwrite or tangle with.
+ */
+async function pullProject(name) {
+  if (!isValidName(name)) throw new Error(`invalid project name: ${name}`);
+  const cwd = path.join(PROJECTS_DIR, name);
+
+  const live = (await listRunning()).find((a) => a.project === name);
+  if (live) throw new Error(`${name} has a running session — stop it first`);
+
+  if (await run('git', ['-C', cwd, 'status', '--porcelain'])) {
+    throw new Error(`${name} has uncommitted changes — commit or stash them first`);
+  }
+
+  return run('git', ['-C', cwd, 'pull', '--ff-only'], GIT_NETWORK);
+}
+
+/**
  * Delete a project directory, permanently.
  *
  * The name arrives from a browser on the LAN, so it is checked rather than
@@ -828,6 +893,21 @@ async function route(req, res) {
     const project = url.searchParams.get('project');
     if (!isValidName(project)) return sendJson(res, 400, { error: 'invalid "project"' });
     return sendJson(res, 200, await projectRisk(project));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/sync') {
+    const project = url.searchParams.get('project');
+    if (!isValidName(project)) return sendJson(res, 400, { error: 'invalid "project"' });
+    return sendJson(res, 200, await syncState(project));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/pull') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    if (typeof body.project !== 'string' || !body.project) {
+      return sendJson(res, 400, { error: 'missing "project"' });
+    }
+    return sendJson(res, 200, { output: await pullProject(body.project) });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/delete') {
