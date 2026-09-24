@@ -224,6 +224,18 @@
   .session:hover { border-color: var(--accent); }
 
   .label { font-size: 14px; overflow-wrap: anywhere; }
+
+  /* A project whose subfolders each have a CLAUDE.md, started one at a time. */
+  .personas {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .persona .label { font-weight: 600; }
+  .persona .sessions { margin-top: 10px; padding-top: 0; border-top: 0; }
   .session .when { margin-top: 2px; }
 
   h2 {
@@ -688,7 +700,8 @@ function runningCard(session) {
   const text = document.createElement('div');
   text.innerHTML = '<span class="dot"></span><span class="name"></span><span class="when"></span>';
   text.querySelector('.name').textContent = session.name;
-  text.querySelector('.when').textContent = `${session.project} · ${session.status}`;
+  const where = session.persona ? `${session.project} / ${session.persona}` : session.project;
+  text.querySelector('.when').textContent = `${where} · ${session.status}`;
   if (session.status === 'working') text.querySelector('.dot').classList.add('working');
 
   const stop = document.createElement('button');
@@ -1121,29 +1134,10 @@ function projectCard(project) {
   name.querySelector('.ago').textContent = ago(project.lastUsed);
   checkSync(project.name, name.querySelector('.sync'));
 
-  const start = document.createElement('button');
-  start.textContent = 'Start';
-  start.addEventListener('click', () => launch(project.name, null, start));
-
   const sessions = document.createElement('div');
   sessions.className = 'sessions';
 
-  const actions = document.createElement('div');
-  actions.className = 'actions';
-
-  // lastUsed is 0 when the project has no transcripts, so there is nothing to
-  // resume and the button would only ever open an empty list.
-  if (project.lastUsed) {
-    const resume = document.createElement('button');
-    resume.className = 'ghost';
-    resume.textContent = 'Resume';
-    resume.addEventListener('click', () => toggleSessions(project.name, sessions, resume));
-    actions.append(resume);
-  }
-
-  actions.append(start);
-
-  row.append(name, actions);
+  row.append(name, startControls({ project: project.name }, project.rootLastUsed, sessions));
 
   const behind = document.createElement('div');
   behind.className = 'behind';
@@ -1159,10 +1153,70 @@ function projectCard(project) {
   front.className = 'front';
   front.append(row, sessions);
 
+  if (project.personas.length > 0) {
+    const personas = document.createElement('div');
+    personas.className = 'personas';
+    for (const persona of project.personas) personas.append(personaRow(project.name, persona));
+    front.append(personas);
+  }
+
   li.append(behind, front);
   makeSwipeable(li, front);
   return li;
 }
+
+/**
+ * Resume and Start for one place a session can begin: a project, or one of
+ * its personas. A target is { project, persona? }.
+ */
+function startControls(target, lastUsed, sessions) {
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  // lastUsed is 0 when there are no transcripts here, so there is nothing to
+  // resume and the button would only ever open an empty list.
+  if (lastUsed) {
+    const resume = document.createElement('button');
+    resume.className = 'ghost';
+    resume.textContent = 'Resume';
+    resume.addEventListener('click', () => toggleSessions(target, sessions, resume));
+    actions.append(resume);
+  }
+
+  const start = document.createElement('button');
+  start.textContent = 'Start';
+  start.addEventListener('click', () => launch(target, null, start));
+  actions.append(start);
+  return actions;
+}
+
+/**
+ * A persona inside its project's card. Its sessions are its own: Claude
+ * files transcripts by the folder a session started in, so the trainer's
+ * past conversations never show up under the nutritionist.
+ */
+function personaRow(project, persona) {
+  const wrap = document.createElement('div');
+  wrap.className = 'persona';
+
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const text = document.createElement('div');
+  text.innerHTML = '<span class="label"></span><span class="when"></span>';
+  text.querySelector('.label').textContent = persona.name;
+  text.querySelector('.when').textContent = ago(persona.lastUsed);
+
+  const sessions = document.createElement('div');
+  sessions.className = 'sessions';
+
+  row.append(text, startControls({ project, persona: persona.name }, persona.lastUsed, sessions));
+  wrap.append(row, sessions);
+  return wrap;
+}
+
+/** "life-advisors/trainer", or just the project when there is no persona. */
+const targetName = (t) => (t.persona ? `${t.project}/${t.persona}` : t.project);
 
 const SWIPE_OPEN = 76; // matches .behind's width
 
@@ -1430,7 +1484,7 @@ async function doDelete(project) {
   }
 }
 
-async function toggleSessions(project, container, button) {
+async function toggleSessions(target, container, button) {
   if (container.childElementCount > 0) {
     container.replaceChildren();
     button.textContent = 'Resume';
@@ -1439,7 +1493,8 @@ async function toggleSessions(project, container, button) {
 
   button.disabled = true;
   try {
-    const res = await fetch(`/api/sessions?project=${encodeURIComponent(project)}`);
+    const query = new URLSearchParams(target);
+    const res = await fetch(`/api/sessions?${query}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `sessions returned ${res.status}`);
 
@@ -1450,7 +1505,7 @@ async function toggleSessions(project, container, button) {
       container.append(empty);
     } else {
       for (const session of data.sessions) {
-        container.append(sessionButton(project, session));
+        container.append(sessionButton(target, session));
       }
     }
     button.textContent = 'Hide';
@@ -1461,7 +1516,7 @@ async function toggleSessions(project, container, button) {
   }
 }
 
-function sessionButton(project, session) {
+function sessionButton(target, session) {
   const button = document.createElement('button');
   button.className = 'session';
 
@@ -1471,12 +1526,13 @@ function sessionButton(project, session) {
   text.querySelector('.when').textContent = ago(session.lastUsed);
 
   button.append(text);
-  button.addEventListener('click', () => launch(project, session.id, button));
+  button.addEventListener('click', () => launch(target, session.id, button));
   return button;
 }
 
-async function launch(project, sessionId, button) {
+async function launch(target, sessionId, button) {
   const label = button.textContent;
+  const project = targetName(target);
   button.disabled = true;
   say(sessionId ? `Resuming ${project}…` : `Starting ${project}…`);
 
@@ -1484,7 +1540,7 @@ async function launch(project, sessionId, button) {
     const res = await fetch('/api/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ project, session: sessionId || undefined }),
+      body: JSON.stringify({ ...target, session: sessionId || undefined }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `start returned ${res.status}`);
