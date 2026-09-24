@@ -134,9 +134,48 @@ function isValidName(name) {
   return typeof name === 'string' && /^[A-Za-z0-9._-]+$/.test(name) && !name.startsWith('.');
 }
 
-/** Resumable sessions for a project, most recent first. */
-async function listSessions(project) {
-  const projectDir = path.join(PROJECTS_DIR, project);
+/**
+ * Where a session starts: the project, or one of its personas.
+ *
+ * Both names arrive from the browser and become a path, so each is held to
+ * the same rule as a project name. Neither can contain a slash or start with
+ * a dot, so the result is always exactly one or two levels under
+ * PROJECTS_DIR.
+ */
+function sessionDir(project, persona) {
+  if (!isValidName(project)) throw new Error(`invalid project name: ${project}`);
+  if (persona === undefined) return path.join(PROJECTS_DIR, project);
+  if (!isValidName(persona)) throw new Error(`invalid persona: ${persona}`);
+  return path.join(PROJECTS_DIR, project, persona);
+}
+
+/**
+ * Subfolders a session can be started in, each with its own CLAUDE.md.
+ *
+ * Claude reads CLAUDE.md from the directory it starts in and every parent,
+ * so a session started in one of these gets the project's shared context and
+ * the folder's own on top. That is how a repository of advisors, one folder
+ * each, is meant to be used; starting at the root would get only the shared
+ * part. Folders without a CLAUDE.md, like shared/ or docs/, are not
+ * personas and are left out.
+ */
+async function listPersonas(projectDir) {
+  const entries = await fsp.readdir(projectDir, { withFileTypes: true });
+  const personas = await Promise.all(
+    entries
+      .filter((e) => e.isDirectory() && isValidName(e.name))
+      .map(async (e) => {
+        const dir = path.join(projectDir, e.name);
+        if (!(await exists(path.join(dir, 'CLAUDE.md')))) return null;
+        return { name: e.name, lastUsed: await lastUsed(dir) };
+      }),
+  );
+  return personas.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Resumable sessions for a project or one of its personas, most recent first. */
+async function listSessions(project, persona) {
+  const projectDir = sessionDir(project, persona);
   const dir = transcriptDir(projectDir);
 
   const sessions = await Promise.all(
@@ -160,7 +199,12 @@ async function listProjects() {
       .map(async (e) => {
         const dir = path.join(PROJECTS_DIR, e.name);
         if (!(await exists(path.join(dir, '.git')))) return null;
-        return { name: e.name, lastUsed: await lastUsed(dir) };
+        const [used, personas] = await Promise.all([lastUsed(dir), listPersonas(dir)]);
+        // Sessions in a persona's folder are work on the project too, so they
+        // count for sorting. rootLastUsed is the root's own, which is what
+        // says whether the root has anything to resume.
+        const latest = Math.max(used, ...personas.map((p) => p.lastUsed));
+        return { name: e.name, lastUsed: latest, rootLastUsed: used, personas };
       }),
   );
 
@@ -302,12 +346,21 @@ function limitLabel(limit) {
 async function listRunning() {
   const agents = JSON.parse(await run('claude', ['agents', '--json']));
 
-  return agents.map((a) => ({
-    pid: a.pid,
-    name: a.name,
-    status: a.status,
-    project: a.cwd?.startsWith(`${PROJECTS_DIR}/`) ? path.basename(a.cwd) : a.cwd,
-  }));
+  return agents.map((a) => {
+    // The first folder under PROJECTS_DIR is the project and the rest is the
+    // persona. basename alone would call a session in life-advisors/trainer
+    // "trainer", and the guards on delete and pull would then miss it.
+    const [project, ...rest] = a.cwd?.startsWith(`${PROJECTS_DIR}/`)
+      ? path.relative(PROJECTS_DIR, a.cwd).split(path.sep)
+      : [a.cwd];
+    return {
+      pid: a.pid,
+      name: a.name,
+      status: a.status,
+      project,
+      persona: rest.length > 0 ? rest.join('/') : undefined,
+    };
+  });
 }
 
 /**
@@ -333,7 +386,7 @@ async function stopSession(pid) {
  * interpolated into a shell string, so a project name can never become a
  * command. start-session validates the name as well.
  */
-async function startSession(name, sessionId) {
+async function startSession(name, sessionId, persona) {
   // A stale Claude token still lets tmux come up and start-session report
   // success, but Remote Control never connects — so the session sits there
   // looking alive and is unreachable from the phone. Refuse up front and say
@@ -342,7 +395,9 @@ async function startSession(name, sessionId) {
   if (!claude.ok && claude.certain) {
     throw new Error('Claude is signed out, so Remote Control would never connect. Sign in from the status panel first.');
   }
-  return run('start-session', sessionId ? [name, sessionId] : [name]);
+  sessionDir(name, persona); // validates both before anything runs
+  const target = persona === undefined ? name : `${name}/${persona}`;
+  return run('start-session', sessionId ? [target, sessionId] : [target]);
 }
 
 /** Repositories on GitHub that aren't cloned here yet. */
@@ -922,7 +977,11 @@ async function route(req, res) {
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
     const project = url.searchParams.get('project');
     if (!isValidName(project)) return sendJson(res, 400, { error: 'invalid "project"' });
-    return sendJson(res, 200, { sessions: await listSessions(project) });
+    const persona = url.searchParams.get('persona') ?? undefined;
+    if (persona !== undefined && !isValidName(persona)) {
+      return sendJson(res, 400, { error: 'invalid "persona"' });
+    }
+    return sendJson(res, 200, { sessions: await listSessions(project, persona) });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/start') {
@@ -932,7 +991,8 @@ async function route(req, res) {
       return sendJson(res, 400, { error: 'missing "project"' });
     }
     const session = typeof body.session === 'string' ? body.session : undefined;
-    return sendJson(res, 200, { output: await startSession(body.project, session) });
+    const persona = typeof body.persona === 'string' ? body.persona : undefined;
+    return sendJson(res, 200, { output: await startSession(body.project, session, persona) });
   }
 
   sendJson(res, 404, { error: 'not found' });

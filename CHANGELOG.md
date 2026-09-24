@@ -8,6 +8,30 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-24
+
+### Added
+
+- Personas. A subfolder of a project with its own `CLAUDE.md` shows up as a
+  row on the project's card, with its own Start and Resume, and a session
+  started there runs in that folder. Claude reads `CLAUDE.md` from the folder
+  and every parent, so it gets the project's shared context and the persona's
+  own. This is for repositories like a set of advisors with one folder each.
+  Folders without a `CLAUDE.md` are left out, and a new one appears on its own.
+- `start-session <project>/<persona>`. Each part is checked on its own, so the
+  path can only ever be one or two levels under the projects directory. The
+  tmux and Remote Control name is `<project>-<persona>`.
+- `start-session` approves `CLAUDE.md` imports from outside the folder, as it
+  already does for the trust prompt. A persona that imports a memory file its
+  siblings share would otherwise wait on an approval nobody is there to give.
+
+### Fixed
+
+- The running list took a session's project from the last folder of its path,
+  so a session in `life-advisors/trainer` read as project `trainer`, and the
+  guards on delete and pull would have missed it. It now takes the first folder
+  under the projects directory, and shows the persona beside it.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added
@@ -154,7 +178,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.1.0...v0.1.1
