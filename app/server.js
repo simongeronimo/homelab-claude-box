@@ -277,7 +277,7 @@ async function publish(title, message) {
 
 async function fireReminder() {
   try {
-    await publish('Claude Box', 'Your five hour window has reset — you can continue.');
+    await publish('Claude Box', 'Your five hour window has reset. You can continue.');
     console.log('reminder sent');
   } catch (err) {
     // Nothing useful to retry against: the window has reset either way, and a
@@ -294,7 +294,7 @@ function armReminder(at) {
 
 /** Arm or cancel the reminder for the window that is open now. */
 async function setReminder(on) {
-  if (!NTFY_TOPIC) throw new Error('notifications are not configured — set NTFY_TOPIC');
+  if (!NTFY_TOPIC) throw new Error('notifications are not configured. Set NTFY_TOPIC');
 
   if (!on) {
     clearTimeout(reminderTimer);
@@ -563,10 +563,10 @@ async function pullProject(name) {
   const cwd = path.join(PROJECTS_DIR, name);
 
   const live = (await listRunning()).find((a) => a.project === name);
-  if (live) throw new Error(`${name} has a running session — stop it first`);
+  if (live) throw new Error(`${name} has a running session. Stop it first`);
 
   if (await run('git', ['-C', cwd, 'status', '--porcelain'])) {
-    throw new Error(`${name} has uncommitted changes — commit or stash them first`);
+    throw new Error(`${name} has uncommitted changes. Commit or stash them first`);
   }
 
   return run('git', ['-C', cwd, 'pull', '--ff-only'], GIT_NETWORK);
@@ -598,7 +598,7 @@ async function deleteProject(name) {
   if (!stat.isDirectory()) throw new Error(`${name} is not a directory`);
 
   const live = (await listRunning()).find((a) => a.project === name);
-  if (live) throw new Error(`${name} has a running session — stop it first`);
+  if (live) throw new Error(`${name} has a running session. Stop it first`);
 
   await fsp.rm(dir, { recursive: true, force: true });
 

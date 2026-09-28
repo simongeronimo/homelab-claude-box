@@ -59,8 +59,64 @@
     gap: 10px;
     font-size: 20px;
     font-weight: 650;
-    margin: 28px 0 20px;
+    margin: 0;
     letter-spacing: -0.01em;
+  }
+
+  /* The title shares its row with the chips that open the login and usage
+     panels. On a phone too narrow for both, the chips drop below it. */
+  header.top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 12px;
+    margin: 28px 0 20px;
+  }
+
+  .chips { display: flex; gap: 6px; }
+
+  button.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 6px 9px;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  button.chip[hidden] { display: none; }
+  button.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .ph { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
+  .chip .caret {
+    width: 12px;
+    height: 12px;
+    color: var(--muted);
+    transition: transform 0.2s ease-out;
+  }
+  .chip[aria-expanded="true"] .caret { transform: rotate(180deg); }
+
+  /* The state is in the chip's label and aria-label as well, so the colour
+     is never the only thing saying it. */
+  .chip.ok .state { color: #2f9e63; }
+  .chip.unknown .state { color: var(--muted); }
+  .chip.bad,
+  .chip.critical { color: #c0392b; border-color: rgba(192, 57, 43, 0.45); }
+  .chip.warning .state { color: var(--stale); }
+  .chip .bell { color: #2f9e63; }
+
+  /* Panels opened from the chips. */
+  .drawer:not([hidden]) { animation: drawer-in 0.18s ease-out; }
+  @keyframes drawer-in { from { opacity: 0; transform: translateY(-4px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .drawer:not([hidden]) { animation: none; }
+    .chip .caret { transition: none; }
   }
 
   /* Sized a little above the cap height, the way a logo sits beside a
@@ -350,7 +406,7 @@
   }
   #code-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-  #usage { margin-bottom: 28px; }
+  #usage { margin-bottom: 20px; }
   #usage:empty { display: none; }
 
   .usage-card {
@@ -594,9 +650,15 @@
 <body>
 <main>
   <!-- alt="" — the heading text beside it already says this. -->
-  <h1><img src="/icon.svg" alt="" width="26" height="26">Claude Box</h1>
-  <div id="status-panel"></div>
-  <div id="usage"></div>
+  <header class="top">
+    <h1><img src="/icon.svg" alt="" width="26" height="26">Claude Box</h1>
+    <div class="chips">
+      <button type="button" class="chip" id="login-chip" aria-controls="status-panel" aria-expanded="false" hidden></button>
+      <button type="button" class="chip" id="usage-chip" aria-controls="usage" aria-expanded="false" hidden></button>
+    </div>
+  </header>
+  <div id="status-panel" class="drawer" hidden></div>
+  <div id="usage" class="drawer" hidden></div>
   <div id="running"></div>
   <div id="list"></div>
 
@@ -778,7 +840,7 @@ const signinDialog = document.getElementById('signin');
 
 const SERVICES = [
   { key: 'claude', name: 'Claude', note: 'Remote Control needs this' },
-  { key: 'github', name: 'GitHub', note: 'cloning, creating and pushing need this' },
+  { key: 'github', name: 'GitHub', note: 'Cloning, creating and pushing need this' },
 ];
 
 async function loadStatus(fresh = false) {
@@ -787,6 +849,8 @@ async function loadStatus(fresh = false) {
     renderStatus(data);
   } catch {
     statusPanel.replaceChildren(); // never let this break the page
+    statusPanel.hidden = true;
+    loginChip.hidden = true;
   }
 }
 
@@ -795,6 +859,7 @@ function renderStatus(data) {
   card.className = 'status-card';
   for (const svc of SERVICES) card.append(serviceRow(svc, data[svc.key]));
   statusPanel.replaceChildren(card);
+  updateLoginChip(data);
 }
 
 /** Days left, but only once it is close enough to be worth saying. */
@@ -831,14 +896,14 @@ function serviceRow(svc, state) {
     ? `${svc.name} signed in`
     : signedOut
       ? `${svc.name} signed out`
-      : `${svc.name} — could not check`;
+      : `Could not check ${svc.name}`;
 
   const who = document.createElement('span');
   who.className = 'svc-who';
   who.textContent = state && state.ok
     ? `${state.who || 'connected'}${expiryNote(state.expiresAt)}`
     : signedOut
-      ? `${state.detail || 'not signed in'} — ${svc.note}`
+      ? `${state.detail || 'not signed in'}. ${svc.note}`
       : `${(state && state.detail) || 'checking…'}`;
   text.append(title, who);
 
@@ -988,7 +1053,7 @@ function settleSignin(svc, state) {
     signinStep(`Sign-in failed: ${state.message || 'unknown error'}`);
     return;
   }
-  signinStep('Still waiting — finish it on your phone.');
+  signinStep('Still waiting. Finish it on your phone.');
 }
 
 // --- Usage ------------------------------------------------------------------
@@ -1014,6 +1079,8 @@ async function loadUsage() {
     // The endpoint behind this is internal and unsupported, so treat it as
     // optional: the launcher's actual job is starting sessions.
     usageEl.replaceChildren();
+    usageEl.hidden = true;
+    usageChip.hidden = true;
   }
 }
 
@@ -1021,17 +1088,17 @@ function renderUsage(limits = lastLimits) {
   lastLimits = limits;
   if (!limits || limits.length === 0) {
     usageEl.replaceChildren();
+    usageEl.hidden = true;
+    usageChip.hidden = true;
     return;
   }
-
-  const heading = document.createElement('h2');
-  heading.textContent = 'Usage';
 
   const card = document.createElement('div');
   card.className = 'usage-card';
   for (const limit of limits) card.append(limitBar(limit));
 
-  usageEl.replaceChildren(heading, card);
+  usageEl.replaceChildren(card);
+  updateUsageChip(limits);
 }
 
 function limitBar(limit) {
@@ -1074,7 +1141,7 @@ function remindButton() {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = notify.remindAt ? 'remind on' : 'remind';
-  button.textContent = notify.remindAt ? '✓ Reminder set — tap to cancel' : 'Notify me when it resets';
+  button.textContent = notify.remindAt ? 'Reminder set. Tap to cancel' : 'Notify me when it resets';
 
   button.addEventListener('click', async () => {
     const turningOn = !notify.remindAt;
@@ -1451,7 +1518,7 @@ const confirmDialog = document.getElementById('confirm');
  */
 function riskText(risk) {
   if (!risk.isRepo) {
-    return { text: 'Not a git repository — nothing here is backed up anywhere.', bad: true };
+    return { text: 'Not a git repository, so nothing here is backed up anywhere.', bad: true };
   }
 
   const losses = [];
@@ -1679,6 +1746,85 @@ async function post(path, body, button, pending) {
     button.disabled = false;
     button.textContent = label;
   }
+}
+
+// --- Header chips -------------------------------------------------------------
+//
+// The logins and the usage bars are worth a glance on every visit but rarely
+// worth reading, so each is a chip beside the title that opens its panel. A
+// lapsed login opens its panel by itself, once, since it needs a tap to fix.
+
+// Phosphor Icons (regular weight, MIT), copied from @phosphor-icons/core
+// 2.1.1 rather than loaded, so the page still has no requests of its own.
+const PH = {
+  check: 'M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z',
+  warning: 'M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z',
+  question: 'M140,180a12,12,0,1,1-12-12A12,12,0,0,1,140,180ZM128,72c-22.06,0-40,16.15-40,36v4a8,8,0,0,0,16,0v-4c0-11,10.77-20,24-20s24,9,24,20-10.77,20-24,20a8,8,0,0,0-8,8v8a8,8,0,0,0,16,0v-.72c18.24-3.35,32-17.9,32-35.28C168,88.15,150.06,72,128,72Zm104,56A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z',
+  gauge: 'M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z',
+  bell: 'M224,71.1a8,8,0,0,1-10.78-3.42,94.13,94.13,0,0,0-33.46-36.91,8,8,0,1,1,8.54-13.54,111.46,111.46,0,0,1,39.12,43.09A8,8,0,0,1,224,71.1ZM35.71,72a8,8,0,0,0,7.1-4.32A94.13,94.13,0,0,1,76.27,30.77a8,8,0,1,0-8.54-13.54A111.46,111.46,0,0,0,28.61,60.32,8,8,0,0,0,35.71,72Zm186.1,103.94A16,16,0,0,1,208,200H167.2a40,40,0,0,1-78.4,0H48a16,16,0,0,1-13.79-24.06C43.22,160.39,48,138.28,48,112a80,80,0,0,1,160,0C208,138.27,212.78,160.38,221.81,175.94ZM150.62,200H105.38a24,24,0,0,0,45.24,0ZM208,184c-10.64-18.27-16-42.49-16-72a64,64,0,0,0-128,0c0,29.52-5.38,53.74-16,72Z',
+  caret: 'M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z',
+};
+
+const ph = (name, className) =>
+  `<svg class="ph ${className}" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH[name]}"/></svg>`;
+
+const loginChip = document.getElementById('login-chip');
+const usageChip = document.getElementById('usage-chip');
+
+function setDrawer(chip, panel, open) {
+  panel.hidden = !open;
+  chip.setAttribute('aria-expanded', String(open));
+}
+
+loginChip.addEventListener('click', () => setDrawer(loginChip, statusPanel, statusPanel.hidden));
+usageChip.addEventListener('click', () => setDrawer(usageChip, usageEl, usageEl.hidden));
+
+let loginOpenedForYou = false;
+
+function updateLoginChip(data) {
+  const signedOut = SERVICES.filter((svc) => {
+    const state = data[svc.key];
+    return state && !state.ok && state.certain;
+  });
+  const allOk = SERVICES.every((svc) => data[svc.key]?.ok);
+  const kind = signedOut.length > 0 ? 'bad' : allOk ? 'ok' : 'unknown';
+
+  const [icon, said] = {
+    ok: ['check', 'Claude and GitHub signed in'],
+    bad: ['warning', `${signedOut.map((svc) => svc.name).join(' and ')} signed out`],
+    unknown: ['question', 'Could not check the logins'],
+  }[kind];
+
+  // Only a lapsed login spells itself out. The rest of the time the icon is
+  // enough, and it keeps the chips on the title's row on a phone.
+  loginChip.className = `chip ${kind}`;
+  loginChip.innerHTML =
+    ph(icon, 'state') + (kind === 'bad' ? '<span>Sign in</span>' : '') + ph('caret', 'caret');
+  loginChip.setAttribute('aria-label', `${said}. Logins`);
+  loginChip.hidden = false;
+
+  if (kind === 'bad' && !loginOpenedForYou) {
+    loginOpenedForYou = true;
+    setDrawer(loginChip, statusPanel, true);
+  }
+}
+
+/** The limit closest to stopping you, since that is the one worth a glance. */
+function updateUsageChip(limits) {
+  const limit = limits.reduce((a, b) => (b.percent > a.percent ? b : a));
+  const pct = Math.round(limit.percent);
+
+  usageChip.className = `chip ${limit.severity}`;
+  usageChip.innerHTML =
+    `${ph('gauge', 'state')}<span>${pct}%</span>` +
+    (notify.remindAt ? ph('bell', 'bell') : '') +
+    ph('caret', 'caret');
+  usageChip.title = limit.label;
+  usageChip.setAttribute(
+    'aria-label',
+    `${limit.label}, ${pct}% used${notify.remindAt ? ', reset reminder set' : ''}. Usage`,
+  );
+  usageChip.hidden = false;
 }
 
 load();
