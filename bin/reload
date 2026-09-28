@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# Put this checkout's launcher and scripts in place of the ones the image
+# installed, and reload the launcher without restarting the container, so
+# running sessions carry on.
+#
+# usage: reload
+#
+# This is for trying a change straight away. It lasts until the container
+# restarts, when the image's copies come back, so a change still ships by
+# being pushed and released.
+#
+# serve is copied like the rest, but it is the loop the launcher runs under,
+# so a change to it only takes effect when the container restarts.
+
+set -euo pipefail
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+APP_DIR=/app
+BIN_DIR=/usr/local/bin
+PID_FILE=/run/launcher.pid
+BACKUP=/tmp/claude-box-reload-backup
+
+if [ ! -f "$REPO/app/server.js" ] || [ ! -f "$REPO/bin/start-session" ]; then
+  echo "reload: $REPO is not a homelab-claude-box checkout" >&2
+  exit 1
+fi
+
+# Refuse a file that doesn't parse before anything is replaced. A launcher
+# that fails to start leaves the phone with nothing to start sessions from.
+node --check "$REPO/app/server.js"
+for script in "$REPO"/bin/*; do
+  case $(head -n 1 "$script") in
+    *node*) node --check "$script" ;;
+    *) bash -n "$script" ;;
+  esac
+done
+
+# Copy under a temporary name and rename over the target. Writing straight
+# into a file a shell is still reading corrupts it mid-run.
+place() {
+  cp "$1" "$2.reload-tmp"
+  chmod --reference="$1" "$2.reload-tmp"
+  mv -f "$2.reload-tmp" "$2"
+}
+
+rm -rf "$BACKUP"
+mkdir -p "$BACKUP/app" "$BACKUP/bin"
+cp -p "$APP_DIR"/* "$BACKUP/app/"
+for script in "$REPO"/bin/*; do
+  target="$BIN_DIR/$(basename "$script")"
+  [ -e "$target" ] && cp -p "$target" "$BACKUP/bin/"
+done
+
+for file in "$REPO"/app/*; do
+  place "$file" "$APP_DIR/$(basename "$file")"
+done
+for script in "$REPO"/bin/*; do
+  place "$script" "$BIN_DIR/$(basename "$script")"
+done
+
+# serve starts a new launcher when the old one exits, and the new one
+# writes its own pid. Wait for that, then for it to answer.
+wait_for_launcher() {
+  local old=$1
+  for _ in $(seq 1 20); do
+    sleep 0.5
+    [ "$(cat "$PID_FILE" 2>/dev/null)" != "$old" ] || continue
+    curl -fs -m 2 -o /dev/null http://localhost:8080/ && return 0
+  done
+  return 1
+}
+
+old=$(cat "$PID_FILE")
+kill "$old"
+if wait_for_launcher "$old"; then
+  echo "reloaded: launcher $old -> $(cat "$PID_FILE"), backup in $BACKUP"
+  exit 0
+fi
+
+# Parsing is not starting. Put the previous files back so the phone keeps a
+# working launcher, and say so loudly.
+echo "reload: the new launcher did not answer; restoring the previous files" >&2
+for file in "$BACKUP"/app/*; do
+  place "$file" "$APP_DIR/$(basename "$file")"
+done
+for file in "$BACKUP"/bin/*; do
+  [ -e "$file" ] && place "$file" "$BIN_DIR/$(basename "$file")"
+done
+old=$(cat "$PID_FILE" 2>/dev/null || echo none)
+kill "$old" 2>/dev/null || true
+wait_for_launcher "$old" && echo "reload: previous launcher restored" >&2
+exit 1

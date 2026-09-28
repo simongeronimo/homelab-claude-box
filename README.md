@@ -94,6 +94,13 @@ Push to `main`. GitHub Actions builds the image and pushes it to `ghcr.io`, then
 restarting the app in the TrueNAS UI pulls it — `pull_policy: always` means every
 start re-pulls.
 
+To try a change without restarting the container, run `bin/reload` from the
+checkout on the box. It copies `app/` and `bin/` over the image's copies and
+reloads the launcher, and running sessions carry on. It refuses files that do
+not parse, and puts the previous files back if the new launcher does not
+answer. The change lasts until the container restarts, so it still ships by
+being pushed and released.
+
 ### Releases
 
 Pushing a git tag publishes matching image tags:
