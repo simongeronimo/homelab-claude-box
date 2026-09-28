@@ -8,6 +8,19 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
+### Changed
+
+- The login status and the usage bars are now two small buttons beside the
+  title, and each opens its panel when tapped. The login button shows a check,
+  or turns red and says "Sign in" when a login has lapsed, in which case its
+  panel opens by itself once. The usage button shows the percentage of the
+  limit closest to stopping you, in that limit's warning colour, and a bell
+  while a reset reminder is set. On a phone both sit on the title's row, so
+  the list of sessions starts near the top of the screen.
+- Messages on the page and from the server no longer use em dashes.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added
@@ -201,7 +214,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...v0.4.0
