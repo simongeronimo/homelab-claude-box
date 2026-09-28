@@ -8,6 +8,20 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
+### Added
+
+- An Open button on each running session, linking to its conversation on
+  claude.ai. The id comes from `~/.claude/sessions/<pid>.json`, which Claude
+  writes for every process. That file is internal and undocumented, so a
+  session with no readable file, or a file left over from an earlier process
+  with the same pid, just gets no button.
+- `bin/reload`, which puts the checkout's launcher and scripts in place of
+  the image's and reloads the launcher without restarting the container. It
+  checks every file parses first, and restores the previous files if the new
+  launcher does not answer. It lasts until the container restarts.
+
 ## [0.4.1] - 2026-09-24
 
 ### Fixed
@@ -187,7 +201,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.2.0...v0.3.0
