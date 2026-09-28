@@ -14,6 +14,7 @@ const DEFAULT_PORT = 8080;
 const PORT = Number(process.env.PORT || DEFAULT_PORT);
 const PROJECTS_DIR = '/root/github';
 const TRANSCRIPTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
 const USAGE_TTL_MS = 60_000;
 
 /**
@@ -342,11 +343,32 @@ function limitLabel(limit) {
   return model ? `Current week (${model} only)` : 'Current week (all models)';
 }
 
+/**
+ * The claude.ai link to a session's Remote Control conversation, or null.
+ *
+ * Each Claude process writes ~/.claude/sessions/<pid>.json, and its
+ * bridgeSessionId is the id in that link. The file is internal and
+ * undocumented, so anything unexpected means no link rather than an error.
+ * Files outlive their process and pids come round again after a restart, so
+ * a file only counts when it names the same session Claude reported.
+ */
+async function remoteUrl(agent) {
+  if (!Number.isInteger(agent.pid)) return null;
+  try {
+    const info = JSON.parse(await fsp.readFile(path.join(SESSIONS_DIR, `${agent.pid}.json`), 'utf8'));
+    if (info.sessionId !== agent.sessionId) return null;
+    if (!/^session_[A-Za-z0-9]+$/.test(info.bridgeSessionId ?? '')) return null;
+    return `https://claude.ai/code/${info.bridgeSessionId}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Live sessions, as Claude itself reports them. */
 async function listRunning() {
   const agents = JSON.parse(await run('claude', ['agents', '--json']));
 
-  return agents.map((a) => {
+  return Promise.all(agents.map(async (a) => {
     // The first folder under PROJECTS_DIR is the project and the rest is the
     // persona. basename alone would call a session in life-advisors/trainer
     // "trainer", and the guards on delete and pull would then miss it.
@@ -359,8 +381,9 @@ async function listRunning() {
       status: a.status,
       project,
       persona: rest.length > 0 ? rest.join('/') : undefined,
+      url: await remoteUrl(a),
     };
-  });
+  }));
 }
 
 /**
