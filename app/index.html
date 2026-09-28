@@ -429,6 +429,21 @@
   }
   .dot.working { background: #d3a03e; }
 
+  /* A link that looks like the ghost buttons beside it. */
+  a.open {
+    display: inline-flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  a.open:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
   button.stop { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   button.stop:hover { color: #c0392b; border-color: #c0392b; }
 
@@ -709,7 +724,23 @@ function runningCard(session) {
   stop.textContent = 'Stop';
   stop.addEventListener('click', () => stopSession(session, stop));
 
-  row.append(text, stop);
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  // The conversation on claude.ai, when the box could find its id.
+  if (session.url) {
+    const open = document.createElement('a');
+    open.className = 'open';
+    open.href = session.url;
+    open.target = '_blank';
+    open.rel = 'noopener';
+    open.textContent = 'Open';
+    open.setAttribute('aria-label', `Open ${session.name} on claude.ai`);
+    actions.append(open);
+  }
+  actions.append(stop);
+
+  row.append(text, actions);
   li.append(row);
   return li;
 }
