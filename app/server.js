@@ -95,17 +95,34 @@ async function lastUsed(projectDir) {
 }
 
 /**
- * The opening prompt of a transcript, for labelling it in the session picker.
- *
- * ponytail: reads the first 64KB only. The opening prompt sits at the top of
- * the file and transcripts run to megabytes; a session whose first real user
- * message somehow lands past 64KB shows up unlabelled rather than costing a
- * multi-megabyte read per entry in the list.
+ * A prompt the way it was typed. A slash command is stored as tags, such as
+ * <command-name>/security-audit</command-name><command-args>this repo</…>,
+ * which reads back as "/security-audit this repo".
  */
-async function firstPrompt(file) {
+function asTyped(text) {
+  const tag = (name) => text.match(new RegExp(`<${name}>([^<]*)</${name}>`))?.[1] ?? '';
+  const command = tag('command-name');
+  return (command ? `${command} ${tag('command-args')}` : text).trim();
+}
+
+/**
+ * What a transcript is for: the name the session was started with, if any,
+ * and its opening prompt, for labelling it in the lists.
+ *
+ * Claude writes a name given with --name as a custom-title line near the top,
+ * before the first prompt.
+ *
+ * ponytail: reads the first 64KB only. Both sit at the top of the file and
+ * transcripts run to megabytes; a session whose first real user message
+ * somehow lands past 64KB shows up unlabelled rather than costing a
+ * multi-megabyte read per entry in the list. A rename later in a session is
+ * written further down, so it is not seen here.
+ */
+async function transcriptLabel(file) {
   const handle = await fsp.open(file);
   try {
     const { buffer, bytesRead } = await handle.read({ buffer: Buffer.alloc(65536) });
+    let title = null;
 
     for (const line of buffer.subarray(0, bytesRead).toString().split('\n')) {
       let entry;
@@ -114,13 +131,16 @@ async function firstPrompt(file) {
       } catch {
         continue; // blank line, or the 64KB cut landed mid-line
       }
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        title = entry.customTitle;
+      }
       if (entry.type !== 'user') continue;
 
       const content = entry.message?.content;
       const text = typeof content === 'string' ? content : content?.find?.((b) => b.text)?.text;
-      if (text?.trim()) return text.trim().slice(0, 120);
+      if (text?.trim()) return { title, prompt: asTyped(text).slice(0, 120) };
     }
-    return null;
+    return { title, prompt: null };
   } finally {
     await handle.close();
   }
@@ -182,8 +202,8 @@ async function listSessions(project, persona) {
   const sessions = await Promise.all(
     (await transcripts(projectDir)).map(async (file) => {
       const full = path.join(dir, file);
-      const [stat, label] = await Promise.all([fsp.stat(full), firstPrompt(full)]);
-      return { id: path.basename(file, '.jsonl'), label, lastUsed: stat.mtimeMs };
+      const [stat, { title, prompt }] = await Promise.all([fsp.stat(full), transcriptLabel(full)]);
+      return { id: path.basename(file, '.jsonl'), title, label: prompt, lastUsed: stat.mtimeMs };
     }),
   );
 
@@ -344,24 +364,37 @@ function limitLabel(limit) {
 }
 
 /**
- * The claude.ai link to a session's Remote Control conversation, or null.
+ * What Claude records about a running process, or null.
  *
- * Each Claude process writes ~/.claude/sessions/<pid>.json, and its
- * bridgeSessionId is the id in that link. The file is internal and
- * undocumented, so anything unexpected means no link rather than an error.
- * Files outlive their process and pids come round again after a restart, so
- * a file only counts when it names the same session Claude reported.
+ * Each Claude process writes ~/.claude/sessions/<pid>.json. The file is
+ * internal and undocumented, so anything unexpected means no extra detail
+ * rather than an error. Files outlive their process and pids come round again
+ * after a restart, so a file only counts when it names the same session
+ * Claude reported.
  */
-async function remoteUrl(agent) {
+async function sessionInfo(agent) {
   if (!Number.isInteger(agent.pid)) return null;
   try {
     const info = JSON.parse(await fsp.readFile(path.join(SESSIONS_DIR, `${agent.pid}.json`), 'utf8'));
-    if (info.sessionId !== agent.sessionId) return null;
-    if (!/^session_[A-Za-z0-9]+$/.test(info.bridgeSessionId ?? '')) return null;
-    return `https://claude.ai/code/${info.bridgeSessionId}`;
+    return info.sessionId === agent.sessionId ? info : null;
   } catch {
     return null;
   }
+}
+
+/** The claude.ai link to a session's Remote Control conversation, or null. */
+function remoteUrl(info) {
+  const id = info?.bridgeSessionId;
+  return typeof id === 'string' && /^session_[A-Za-z0-9]+$/.test(id) ? `https://claude.ai/code/${id}` : null;
+}
+
+/**
+ * The name the Claude app lists a session under, or null. start-session gives
+ * the tmux session and Remote Control the same name, so the tmux session a
+ * process runs in is what the app shows. tmux names cannot contain a colon.
+ */
+function appName(info) {
+  return typeof info?.tmux === 'string' ? info.tmux.split(':')[0] || null : null;
 }
 
 /** Live sessions, as Claude itself reports them. */
@@ -375,13 +408,18 @@ async function listRunning() {
     const [project, ...rest] = a.cwd?.startsWith(`${PROJECTS_DIR}/`)
       ? path.relative(PROJECTS_DIR, a.cwd).split(path.sep)
       : [a.cwd];
+    const info = await sessionInfo(a);
     return {
       pid: a.pid,
-      name: a.name,
+      // Claude's own name for it, like pink-cells-a0, matches nothing the
+      // user sees, so the app's name is used when there is one.
+      name: appName(info) ?? a.name,
       status: a.status,
       project,
       persona: rest.length > 0 ? rest.join('/') : undefined,
-      url: await remoteUrl(a),
+      url: remoteUrl(info),
+      // A name typed when starting, as opposed to one Claude made up.
+      title: info?.nameSource === 'user' ? a.name : null,
     };
   }));
 }
@@ -403,13 +441,24 @@ async function stopSession(pid) {
 }
 
 /**
+ * A name typed on the phone for a session, so its purpose is clear in the
+ * Claude app and the lists here. start-session hands it to Claude as an
+ * argument of its own, never through a shell, so the limits are only what
+ * keeps it a name: one line, short enough not to be cut off, and not starting
+ * with a dash that Claude could read as a flag.
+ */
+function isValidTitle(title) {
+  return typeof title === 'string' && title.length <= 60 && /^[^\p{Cc}\s-][^\p{Cc}]*$/u.test(title);
+}
+
+/**
  * Start a session, returning what start-session printed.
  *
  * execFile, not exec: `name` is passed as a discrete argument rather than
  * interpolated into a shell string, so a project name can never become a
  * command. start-session validates the name as well.
  */
-async function startSession(name, sessionId, persona) {
+async function startSession(name, sessionId, persona, title) {
   // A stale Claude token still lets tmux come up and start-session report
   // success, but Remote Control never connects — so the session sits there
   // looking alive and is unreachable from the phone. Refuse up front and say
@@ -419,8 +468,13 @@ async function startSession(name, sessionId, persona) {
     throw new Error('Claude is signed out, so Remote Control would never connect. Sign in from the status panel first.');
   }
   sessionDir(name, persona); // validates both before anything runs
+  if (title !== undefined && !isValidTitle(title)) throw new Error('invalid session name');
   const target = persona === undefined ? name : `${name}/${persona}`;
-  return run('start-session', sessionId ? [target, sessionId] : [target]);
+  return run('start-session', [
+    ...(title === undefined ? [] : ['--name', title]),
+    target,
+    ...(sessionId ? [sessionId] : []),
+  ]);
 }
 
 /** Repositories on GitHub that aren't cloned here yet. */
@@ -1015,7 +1069,8 @@ async function route(req, res) {
     }
     const session = typeof body.session === 'string' ? body.session : undefined;
     const persona = typeof body.persona === 'string' ? body.persona : undefined;
-    return sendJson(res, 200, { output: await startSession(body.project, session, persona) });
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : undefined;
+    return sendJson(res, 200, { output: await startSession(body.project, session, persona, title) });
   }
 
   sendJson(res, 404, { error: 'not found' });

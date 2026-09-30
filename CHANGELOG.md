@@ -8,6 +8,34 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-30
+
+### Added
+
+- An optional name when starting a session. Start opens a "Name (optional)"
+  field. A name is passed to Claude with `--name`, the Claude app lists the
+  session as `<project>: <name>`, the running list and the Resume list show
+  it, and resuming keeps it. Left empty, a session starts as before.
+- `start-session --name <name>`. The name must be one line, at most 60
+  characters, and not start with a dash or space.
+
+### Changed
+
+- The running list shows each session by the name the Claude app uses, such
+  as `life-advisors-nutritionist`, instead of Claude's internal one, such as
+  `nutritionist-27`.
+- `start-session` hands tmux the command as separate arguments, so it runs
+  without a shell and a typed name can never be read as shell syntax.
+- Text fields are 16px, so iOS no longer zooms the page when one is tapped.
+
+### Fixed
+
+- The status dot on a running session now turns amber while it is working.
+  Claude reports that state as `busy`, and the page only checked for
+  `working`.
+- A session that began with a slash command is labelled the way it was
+  typed, such as `/security-audit this repository`, instead of raw tags.
+
 ## [0.6.0] - 2026-09-28
 
 ### Changed
@@ -214,7 +242,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.0...v0.4.1
