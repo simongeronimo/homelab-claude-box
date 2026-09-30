@@ -526,11 +526,12 @@
     margin: 16px 0;
   }
 
+  /* 16px, because iOS zooms the whole page into any smaller field it focuses. */
   input[type="text"], #create-name {
     flex: 1 1 180px;
     min-width: 0;
     font: inherit;
-    font-size: 15px;
+    font-size: 16px;
     color: var(--text);
     background: var(--bg);
     border: 1px solid var(--line);
@@ -615,6 +616,25 @@
     font-size: 12.5px;
     padding: 4px 12px;
     min-height: 30px;
+  }
+
+  /* --- Naming a new session ------------------------------------------- */
+
+  .name-form { display: flex; flex-direction: column; gap: 6px; }
+  .name-label { font-size: 12.5px; color: var(--muted); }
+  .name-row { display: flex; gap: 8px; }
+
+  /* A running session labelled with the name typed when it was started. */
+  .name.said {
+    font-family: inherit;
+    font-weight: 600;
+    /* Two lines at most, so a long name can't push the rest of the list
+       off the screen. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
 
   /* --- Loading placeholders --------------------------------------------- */
@@ -775,11 +795,19 @@ function runningCard(session) {
   row.className = 'row';
 
   const text = document.createElement('div');
-  text.innerHTML = '<span class="dot"></span><span class="name"></span><span class="when"></span>';
-  text.querySelector('.name').textContent = session.name;
+  text.innerHTML = '<span class="name"></span><span class="when"></span>';
+  const label = text.querySelector('.name');
+  label.textContent = session.title || session.name;
+  if (session.title) label.classList.add('said');
+
+  // Inside the label, so the two-line clamp keeps it on the first line.
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  // Claude reports a session mid-turn as busy.
+  if (session.status === 'busy' || session.status === 'working') dot.classList.add('working');
+  label.prepend(dot);
   const where = session.persona ? `${session.project} / ${session.persona}` : session.project;
   text.querySelector('.when').textContent = `${where} · ${session.status}`;
-  if (session.status === 'working') text.querySelector('.dot').classList.add('working');
 
   const stop = document.createElement('button');
   stop.className = 'stop';
@@ -797,7 +825,7 @@ function runningCard(session) {
     open.target = '_blank';
     open.rel = 'noopener';
     open.textContent = 'Open';
-    open.setAttribute('aria-label', `Open ${session.name} on claude.ai`);
+    open.setAttribute('aria-label', `Open ${session.title || session.name} on claude.ai`);
     actions.append(open);
   }
   actions.append(stop);
@@ -1266,26 +1294,84 @@ function projectCard(project) {
 /**
  * Resume and Start for one place a session can begin: a project, or one of
  * its personas. A target is { project, persona? }.
+ *
+ * Both open in the drawer under the row, one at a time: Resume the list of
+ * past sessions, Start a field for naming the new one.
  */
-function startControls(target, lastUsed, sessions) {
+function startControls(target, lastUsed, drawer) {
   const actions = document.createElement('div');
   actions.className = 'actions';
+
+  const start = document.createElement('button');
+  let resume = null;
+
+  // Close whichever is open, and put both buttons back.
+  const close = () => {
+    drawer.replaceChildren();
+    delete drawer.dataset.open;
+    start.textContent = 'Start';
+    start.className = '';
+    if (resume) resume.textContent = 'Resume';
+  };
 
   // lastUsed is 0 when there are no transcripts here, so there is nothing to
   // resume and the button would only ever open an empty list.
   if (lastUsed) {
-    const resume = document.createElement('button');
+    resume = document.createElement('button');
     resume.className = 'ghost';
     resume.textContent = 'Resume';
-    resume.addEventListener('click', () => toggleSessions(target, sessions, resume));
+    resume.addEventListener('click', () => {
+      const wasOpen = drawer.dataset.open === 'sessions';
+      close();
+      if (!wasOpen) showSessions(target, drawer, resume);
+    });
     actions.append(resume);
   }
 
-  const start = document.createElement('button');
   start.textContent = 'Start';
-  start.addEventListener('click', () => launch(target, null, start));
+  start.addEventListener('click', () => {
+    const wasOpen = drawer.dataset.open === 'name';
+    close();
+    if (wasOpen) return;
+
+    drawer.dataset.open = 'name';
+    start.textContent = 'Cancel';
+    start.className = 'ghost';
+    const form = nameForm(target);
+    drawer.append(form);
+    // Focused inside the tap itself, which is what makes iOS raise the keyboard.
+    form.querySelector('input').focus();
+  });
   actions.append(start);
   return actions;
+}
+
+/**
+ * The optional name for a new session, so it is clear later what it was
+ * for, both in the Claude app and in the lists here. Left empty, the session
+ * starts with the folder's name, as before.
+ */
+function nameForm(target) {
+  const form = document.createElement('form');
+  form.className = 'name-form';
+  form.innerHTML =
+    '<label class="name-label">Name (optional)</label>' +
+    '<div class="name-row"><input type="text"><button type="submit">Start</button></div>';
+
+  const input = form.querySelector('input');
+  input.id = `name-${targetName(target).replace(/[^A-Za-z0-9-]/g, '-')}`;
+  form.querySelector('label').htmlFor = input.id;
+  input.maxLength = 60;
+  input.placeholder = 'e.g. fix the login bug';
+  input.autocomplete = 'off';
+  input.enterKeyHint = 'go';
+
+  const go = form.querySelector('button');
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    launch(target, null, go, input.value.trim() || undefined);
+  });
+  return form;
 }
 
 /**
@@ -1334,6 +1420,7 @@ function makeSwipeable(li, front) {
   let horizontal = false;
 
   front.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('input')) return; // selecting text, not swiping
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     startX = event.clientX;
     startY = event.clientY;
@@ -1582,19 +1669,15 @@ async function doDelete(project) {
   }
 }
 
-async function toggleSessions(target, container, button) {
-  if (container.childElementCount > 0) {
-    container.replaceChildren();
-    button.textContent = 'Resume';
-    return;
-  }
-
+async function showSessions(target, container, button) {
+  container.dataset.open = 'sessions';
   button.disabled = true;
   try {
     const query = new URLSearchParams(target);
     const res = await fetch(`/api/sessions?${query}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `sessions returned ${res.status}`);
+    if (container.dataset.open !== 'sessions') return; // closed while loading
 
     if (data.sessions.length === 0) {
       const empty = document.createElement('p');
@@ -1608,6 +1691,7 @@ async function toggleSessions(target, container, button) {
     }
     button.textContent = 'Hide';
   } catch (err) {
+    delete container.dataset.open;
     say(`Could not load sessions: ${err.message}`);
   } finally {
     button.disabled = false;
@@ -1620,15 +1704,16 @@ function sessionButton(target, session) {
 
   const text = document.createElement('span');
   text.innerHTML = '<span class="label"></span><span class="when"></span>';
-  text.querySelector('.label').textContent = session.label || '(no prompt recorded)';
+  text.querySelector('.label').textContent = session.title || session.label || '(no prompt recorded)';
   text.querySelector('.when').textContent = ago(session.lastUsed);
 
   button.append(text);
-  button.addEventListener('click', () => launch(target, session.id, button));
+  // The name goes back with it, so the Claude app lists it by name again.
+  button.addEventListener('click', () => launch(target, session.id, button, session.title || undefined));
   return button;
 }
 
-async function launch(target, sessionId, button) {
+async function launch(target, sessionId, button, title) {
   const label = button.textContent;
   const project = targetName(target);
   button.disabled = true;
@@ -1638,7 +1723,7 @@ async function launch(target, sessionId, button) {
     const res = await fetch('/api/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...target, session: sessionId || undefined }),
+      body: JSON.stringify({ ...target, session: sessionId || undefined, title }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `start returned ${res.status}`);

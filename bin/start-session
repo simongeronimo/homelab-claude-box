@@ -3,8 +3,10 @@
 # Start a Claude Code session with Remote Control enabled, in a project
 # directory, inside a detached tmux session so it outlives the caller.
 #
-# usage: start-session <project>[/<persona>] [session-id]
+# usage: start-session [--name <name>] <project>[/<persona>] [session-id]
 #
+# With --name, the session is given that name: Claude shows it, and the
+# Claude app lists the session as <project>: <name>.
 # With a persona, the session starts in that subfolder of the project, so
 # Claude loads its CLAUDE.md on top of the project's. With a session id,
 # resumes that conversation instead of starting a new one.
@@ -13,9 +15,20 @@ set -euo pipefail
 
 PROJECTS_DIR=/root/github
 
-if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-  echo "usage: start-session <project>[/<persona>] [session-id]" >&2
+usage() {
+  echo "usage: start-session [--name <name>] <project>[/<persona>] [session-id]" >&2
   exit 2
+}
+
+TITLE=
+if [ "${1:-}" = "--name" ]; then
+  [ $# -ge 2 ] || usage
+  TITLE=$2
+  shift 2
+fi
+
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+  usage
 fi
 
 TARGET=$1
@@ -41,6 +54,20 @@ if ! valid_name "$NAME"; then
 fi
 if [ "$TARGET" != "$NAME" ] && ! valid_name "$PERSONA"; then
   echo "invalid persona: $PERSONA" >&2
+  exit 2
+fi
+
+# The name reaches Claude as an argument of its own (see the tmux call at the
+# end), so no character in it can become shell syntax. These checks keep it a
+# name: one line, short, and not something Claude could read as a flag.
+case $TITLE in
+  -* | " "* | *[[:cntrl:]]*)
+    echo "invalid session name: $TITLE" >&2
+    exit 2
+    ;;
+esac
+if [ ${#TITLE} -gt 60 ]; then
+  echo "session name is longer than 60 characters" >&2
   exit 2
 fi
 
@@ -114,12 +141,16 @@ if tmux has-session -t "=$SESSION" 2>/dev/null; then
   SESSION="$BASE-$n"
 fi
 
-if [ -n "$SESSION_ID" ]; then
-  CMD="claude --resume '$SESSION_ID' --remote-control '$SESSION'"
+# Given the command as separate arguments, tmux runs it directly rather than
+# through sh -c, so a typed name arrives as exactly one argument.
+CMD=(claude)
+[ -z "$SESSION_ID" ] || CMD+=(--resume "$SESSION_ID")
+if [ -n "$TITLE" ]; then
+  CMD+=(--name "$TITLE" --remote-control "$BASE: $TITLE")
 else
-  CMD="claude --remote-control '$SESSION'"
+  CMD+=(--remote-control "$SESSION")
 fi
 
-tmux new-session -d -s "$SESSION" -c "$DIR" "$CMD"
+tmux new-session -d -s "$SESSION" -c "$DIR" "${CMD[@]}"
 
 echo "started $SESSION in $DIR"
