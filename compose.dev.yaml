@@ -22,6 +22,10 @@ services:
       # that existed when it started, silently. Mounted somewhere of its own
       # rather than over /usr/local/bin, which holds node and npm.
       - ./bin:/opt/bin
+    # Put LAUNCHER_PASSWORD, and NTFY_TOPIC if you want reminders, in a
+    # gitignored .env next to this file.
     environment:
+      LAUNCHER_PASSWORD: ${LAUNCHER_PASSWORD:?set LAUNCHER_PASSWORD in .env}
+      NTFY_TOPIC: ${NTFY_TOPIC:-}
       PATH: /opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     init: true

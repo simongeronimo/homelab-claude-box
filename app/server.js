@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -53,6 +54,35 @@ const ICONS = {
   '/icon.svg': { file: 'icon.svg', type: 'image/svg+xml' },
   '/apple-touch-icon.png': { file: 'apple-touch-icon.png', type: 'image/png' },
 };
+
+/**
+ * The launcher's own login, separate from the Claude and GitHub sign-ins it
+ * manages. Port 8080 is reachable from the whole tailnet and from every other
+ * container on the server, and through Docker they all arrive from Docker's
+ * addresses, so the source IP cannot tell a phone from a container. A password
+ * is the only thing that can.
+ *
+ * Unset means nobody can sign in, rather than nobody needs to.
+ */
+const PASSWORD = process.env.LAUNCHER_PASSWORD || '';
+
+/** Long enough that a phone added to the Home Screen rarely asks again. */
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const COOKIE = 'claude_box_session';
+
+/**
+ * Sessions are kept on disk so a reload or a crash does not sign the phone
+ * out. Only an HMAC of each token is stored, keyed by the password, so the
+ * file alone lets nobody in, and changing the password ends every session.
+ */
+const AUTH_SESSIONS_FILE = path.join(os.homedir(), '.claude-box', 'auth-sessions.json');
+
+/**
+ * Failed logins are throttled for everyone at once. Per-address limits would
+ * be pointless when every request arrives from the same Docker gateway.
+ */
+const FREE_FAILURES = 5;
+const MAX_LOCKOUT_MS = 5 * 60 * 1000;
 
 const exists = (p) => fsp.access(p).then(() => true, () => false);
 
@@ -888,6 +918,136 @@ async function submitLoginCode(service, code) {
 }
 
 // ---------------------------------------------------------------------------
+// The launcher's own login.
+// ---------------------------------------------------------------------------
+
+const sessionId = (token) => crypto.createHmac('sha256', PASSWORD).update(token).digest('hex');
+
+/** HMAC id -> expiry, epoch ms. */
+let authSessions = new Map();
+
+async function loadAuthSessions() {
+  try {
+    const raw = JSON.parse(await fsp.readFile(AUTH_SESSIONS_FILE, 'utf8'));
+    authSessions = new Map(Object.entries(raw).filter(([, exp]) => exp > Date.now()));
+  } catch {
+    authSessions = new Map(); // first start, or a damaged file: sign in again
+  }
+}
+
+async function saveAuthSessions() {
+  for (const [id, exp] of authSessions) if (exp <= Date.now()) authSessions.delete(id);
+  await fsp.mkdir(path.dirname(AUTH_SESSIONS_FILE), { recursive: true });
+  await fsp.writeFile(AUTH_SESSIONS_FILE, JSON.stringify(Object.fromEntries(authSessions)), { mode: 0o600 });
+}
+
+function cookieToken(req) {
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const [name, ...value] = part.trim().split('=');
+    if (name === COOKIE) return value.join('=');
+  }
+  return null;
+}
+
+function isSignedIn(req) {
+  const token = cookieToken(req);
+  if (!PASSWORD || !token) return false;
+  return (authSessions.get(sessionId(token)) ?? 0) > Date.now();
+}
+
+/**
+ * Secure only when the request came through an HTTPS proxy. Over plain http a
+ * Secure cookie is never sent back, which would make signing in impossible.
+ * A forged header only makes the forger's own cookie stricter.
+ */
+function sessionCookie(req, token, maxAgeSeconds) {
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  return `${COOKIE}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict${secure}`;
+}
+
+/** Hashed first so the comparison is constant time whatever the lengths. */
+function passwordMatches(given) {
+  const digest = (s) => crypto.createHash('sha256').update(String(s)).digest();
+  return Boolean(PASSWORD) && crypto.timingSafeEqual(digest(given), digest(PASSWORD));
+}
+
+let failures = 0;
+let lockedUntil = 0;
+let checking = false;
+
+/**
+ * Five tries, then each failure doubles the wait before the next one is even
+ * checked, up to five minutes. The cap bounds how long a container spamming
+ * wrong passwords can keep the real owner out; against a long random password
+ * a guess every five minutes gets nowhere.
+ */
+function recordFailure() {
+  failures += 1;
+  if (failures >= FREE_FAILURES) {
+    lockedUntil = Date.now() + Math.min(1000 * 2 ** (failures - FREE_FAILURES), MAX_LOCKOUT_MS);
+  }
+  console.log(`launcher login failed (${failures} in a row)`);
+}
+
+async function readForm(req) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 4096) throw new Error('form too large');
+  }
+  return new URLSearchParams(body);
+}
+
+async function sendLoginPage(res, status, message = '') {
+  const html = (await fsp.readFile(path.join(__dirname, 'login.html'), 'utf8')).replace(
+    '<!--message-->',
+    message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`),
+  );
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(html);
+}
+
+async function handleLogin(req, res) {
+  if (!PASSWORD) {
+    return sendLoginPage(res, 503, 'Login is turned off: LAUNCHER_PASSWORD is not set on the container.');
+  }
+  if (req.method === 'GET') return sendLoginPage(res, 200);
+
+  // One check at a time. Otherwise a burst of parallel guesses would all pass
+  // the lockout test before the first of them is counted as a failure.
+  const wait = Math.max(lockedUntil - Date.now(), checking ? 1000 : 0);
+  if (wait > 0) {
+    res.setHeader('retry-after', String(Math.ceil(wait / 1000)));
+    return sendLoginPage(res, 429, `Too many attempts. Try again in ${Math.ceil(wait / 1000)} seconds.`);
+  }
+  checking = true;
+  try {
+    if (!passwordMatches((await readForm(req)).get('password') ?? '')) {
+      recordFailure();
+      await sleep(1000);
+      return sendLoginPage(res, 401, 'Wrong password.');
+    }
+  } finally {
+    checking = false;
+  }
+
+  failures = 0;
+  lockedUntil = 0;
+  const token = crypto.randomBytes(32).toString('base64url');
+  authSessions.set(sessionId(token), Date.now() + SESSION_TTL_MS);
+  await saveAuthSessions();
+  res.writeHead(303, { location: '/', 'set-cookie': sessionCookie(req, token, SESSION_TTL_MS / 1000) });
+  res.end();
+}
+
+async function handleLogout(req, res) {
+  const token = cookieToken(req);
+  if (token && authSessions.delete(sessionId(token))) await saveAuthSessions();
+  res.writeHead(303, { location: '/login', 'set-cookie': sessionCookie(req, '', 0) });
+  res.end();
+}
+
+// ---------------------------------------------------------------------------
 // Plumbing.
 // ---------------------------------------------------------------------------
 
@@ -931,6 +1091,20 @@ async function readJson(req, res) {
 
 async function route(req, res) {
   const url = new URL(req.url, 'http://localhost');
+
+  if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/login') {
+    return handleLogin(req, res);
+  }
+
+  // Everything below needs a session. A page goes to the login form; an API
+  // call gets a 401, which the page answers by going there itself.
+  if (!isSignedIn(req)) {
+    if (url.pathname.startsWith('/api/')) return sendJson(res, 401, { error: 'not signed in' });
+    res.writeHead(303, { location: '/login' });
+    return res.end();
+  }
+
+  if (req.method === 'POST' && url.pathname === '/logout') return handleLogout(req, res);
 
   if (req.method === 'GET' && url.pathname === '/') {
     // Read first, then write the header. writeHead before the await means a
@@ -1076,14 +1250,17 @@ async function route(req, res) {
   sendJson(res, 404, { error: 'not found' });
 }
 
-http
-  .createServer((req, res) => {
-    route(req, res).catch((err) => {
-      console.error(`${req.method} ${req.url}:`, err);
-      if (!res.headersSent) sendJson(res, 500, { error: err.message });
-    });
-  })
-  .listen(PORT, () => {
+const server = http.createServer((req, res) => {
+  route(req, res).catch((err) => {
+    console.error(`${req.method} ${req.url}:`, err);
+    if (!res.headersSent) sendJson(res, 500, { error: err.message });
+  });
+});
+
+// Sessions load before the port opens, so a reload never turns away a phone
+// that is still signed in.
+loadAuthSessions().then(() =>
+  server.listen(PORT, () => {
     // So a reload is `kill $(cat /run/launcher.pid)` using the shell builtin.
     // Restarting the container would work too, and would kill every session.
     //
@@ -1095,5 +1272,7 @@ http
       require('node:fs').writeFileSync('/run/launcher.pid', String(process.pid));
     }
     console.log(`launcher on ${PORT}, projects in ${PROJECTS_DIR}`);
+    if (!PASSWORD) console.error('LAUNCHER_PASSWORD is not set, so nobody can sign in to the launcher');
     restoreReminder().catch((err) => console.error('could not restore reminder:', err.message));
-  });
+  }),
+);

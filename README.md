@@ -17,7 +17,19 @@ Paths assume a pool named `Apps`. Adjust if yours differs.
    Actions and pulled from `ghcr.io`.
 
 2. **Apps → Discover → ⋮ → Install via YAML**. Name it `claude-box` and paste the
-   contents of `compose.yaml`.
+   contents of `compose.yaml`. Put the secrets in the stack's `.env`, which in
+   Dockge is the editor below the compose file:
+
+   ```bash
+   LAUNCHER_PASSWORD=<output of openssl rand -base64 24>
+   NTFY_TOPIC=claude-box-<output of openssl rand -hex 12>
+   ```
+
+   `LAUNCHER_PASSWORD` is required, and the deploy fails without it. Without a
+   login, anything that can reach port 8080 can start sessions as root, and
+   that includes every other container on the server. A login lasts 30 days.
+   A Home Screen app on iOS keeps its own cookies, so it asks once too.
+   `NTFY_TOPIC` is optional and turns on reset reminders.
 
 3. Log in to Claude inside the container:
 
@@ -78,6 +90,9 @@ for this — restarting the container destroys every running session, which is t
 thing `bin/serve` exists to prevent.
 
 `index.html` needs nothing at all; it is read from disk on each request.
+
+`compose.dev.yaml` reads `LAUNCHER_PASSWORD` from a `.env` next to it, which git
+ignores.
 
 Rebuild only when the Dockerfile changes. Put some git repositories in
 `data/home/github/` to have something to launch.
