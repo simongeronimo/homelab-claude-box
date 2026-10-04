@@ -8,6 +8,30 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-04
+
+### Added
+
+- A login for the launcher. Every page and API route needs a session, and
+  only `/login` answers without one. The password comes from
+  `LAUNCHER_PASSWORD`. A login lasts 30 days, survives reloads and crashes,
+  and ends when the password changes. The cookie is HttpOnly and
+  SameSite=Strict, and also Secure when the request came through an HTTPS
+  proxy.
+- Failed logins are slowed down. Each wrong password takes a second to
+  answer. After five in a row, the next attempt is refused for 1 second, and
+  the wait doubles with each further failure up to 5 minutes. The limit is
+  shared by everyone, since every request arrives from the same Docker
+  address.
+- A sign-out button beside the header chips.
+
+### Changed
+
+- `compose.yaml` takes `LAUNCHER_PASSWORD` and `NTFY_TOPIC` from the stack's
+  `.env`. The deploy fails if `LAUNCHER_PASSWORD` is unset. The ntfy topic
+  that used to be committed there stays readable in the git history, so pick
+  a new one.
+
 ## [0.7.0] - 2026-09-30
 
 ### Added
@@ -242,7 +266,8 @@ First tagged release.
 - Deployment as a TrueNAS SCALE custom app, with `/root` mounted from a dataset so
   the Claude and GitHub logins survive image rebuilds.
 
-[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/simongeronimo/homelab-claude-box/compare/v0.4.1...v0.5.0

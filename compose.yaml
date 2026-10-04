@@ -7,12 +7,18 @@ services:
       - "8080:8080"
     volumes:
       - /mnt/Apps/claude-box/home:/root
-    # ntfy has no accounts, so this topic name is the only thing keeping your
-    # notifications yours — anyone who knows it can read them and post to them.
-    # Treat it like a password: keep it long and random, and change it here if
-    # it ever leaks. Unset it to turn the feature off.
+    # Both values are secrets, so they live in the stack's .env, never here.
+    #
+    # LAUNCHER_PASSWORD is the launcher's login. Anyone who can reach port
+    # 8080 can start sessions as root, so it is required and the deploy fails
+    # without it. Make it long and random, for example `openssl rand -base64 24`.
+    #
+    # ntfy has no accounts, so NTFY_TOPIC is the only thing keeping your
+    # notifications yours. Anyone who knows it can read them and post to them.
+    # Keep it long and random. Leave it out to turn reminders off.
     environment:
-      NTFY_TOPIC: claude-box-u2qo77qvkxob
+      LAUNCHER_PASSWORD: ${LAUNCHER_PASSWORD:?set LAUNCHER_PASSWORD in .env}
+      NTFY_TOPIC: ${NTFY_TOPIC:-}
     init: true
     restart: unless-stopped
     # Blast radius for a runaway agent: a fork bomb or a build that eats all
