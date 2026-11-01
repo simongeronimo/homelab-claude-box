@@ -18,8 +18,9 @@ RUN git clone --depth 1 --branch "$PONYTAIL_VERSION" \
     && cp -r /tmp/ponytail/skills/. /opt/skills/ \
     && rm -rf /tmp/ponytail
 
-COPY bin/ /usr/local/bin/
-RUN chmod +x /usr/local/bin/start-session /usr/local/bin/serve /usr/local/bin/usage
+# --chmod, rather than a chmod naming each script: the list went stale once
+# already and shipped reload unexecutable.
+COPY --chmod=755 bin/ /usr/local/bin/
 COPY app/ /app/
 EXPOSE 8080
 CMD ["serve"]
