@@ -22,6 +22,15 @@ if [ -d /opt/skills ]; then
   cp -r /opt/skills/. /root/.claude/skills/
 fi
 
+# Claude's `claude` on PATH is a small launcher; the binary it runs lives under
+# $HOME, which the dataset mounts over — so the install baked into the image is
+# hidden at runtime, and the launcher reports "native binary not installed".
+# A self-update that half-finishes leaves the same wreckage. Install it here,
+# where the mount exists: it lands on the dataset, survives restarts, and a
+# restart is what repairs it. The check costs nothing when it is already there.
+export PATH="$PATH:/root/.local/bin"
+claude --version >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code
+
 while true; do
   node /app/server.js || echo "launcher exited ($?), restarting in 2s" >&2
   sleep 2
