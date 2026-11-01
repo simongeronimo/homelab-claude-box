@@ -8,6 +8,21 @@ Image tags matching each version are published to
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-01
+
+### Fixed
+
+- The launcher no longer loses `claude`. The command on PATH is a launcher for
+  a native binary under `$HOME`, and the dataset mounts over `/root`, so the
+  copy installed when the image was built is hidden at runtime — the status
+  row showed "Could not check Claude" and sessions could not start. `serve`
+  now checks `claude` works at startup and reinstalls it onto the dataset if
+  not, which also repairs a self-update that half-finished. `/root/.local/bin`
+  is on PATH, so either install layout is found.
+- `reload` ships executable. The image's `chmod +x` named each script and
+  missed it, so the documented reload workflow could not run. `bin/` is now
+  copied with `--chmod=755`, which cannot go stale when a script is added.
+
 ## [0.8.0] - 2026-10-04
 
 ### Added
